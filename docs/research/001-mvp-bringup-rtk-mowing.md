@@ -11,17 +11,21 @@ target_release: 1
 
 ## Introduction
 
-This research investigates the open technical questions for **Release 1 (MVP)** of the zero-turn mower robotic conversion tooling project, as defined in vision document `001-zero-turn-mower-rover.md`. Release 1's goal is to deliver a CLI tooling suite that brings the robot from cold-boot to autonomous mowing of a 4-acre lawn using RTK-only positioning. The research covers SITL fidelity, MAVLink/RTK telemetry over SiK radios, ArduPilot baseline parameters for twin-servo skid-steer, RTK base station setup, servo selection, mission file formats, and safe-stop design — providing the planner with the answers needed to build detailed implementation plans for each MVP phase.
+This research investigates the open technical questions for **Release 1 (MVP)** of the zero-turn mower robotic conversion tooling project, as defined in vision document `001-zero-turn-mower-rover.md`. Release 1's goal is to deliver a CLI tooling suite that brings the robot from cold-boot to autonomous mowing of a 4-acre lawn using RTK-only positioning. The research covers SITL fidelity, MAVLink/RTK telemetry over SiK radios, ArduPilot baseline parameters for twin-servo skid-steer, RTK base station setup, servo selection, mission file formats, safe-stop design, and engine state monitoring — providing the planner with the answers needed to build detailed implementation plans for each MVP phase.
 
 ## Overview
 
-All seven research phases for the Release 1 MVP are complete. The investigation confirms that the proposed architecture (Pixhawk Cube Orange + ArduPilot Rover + ArduSimple **simpleRTK3B Heading** (Septentrio mosaic-H) + dual back-driveable servos + dual SiK radios + Jetson Orin Nano) is technically sound for a residential 4-acre RTK-only autonomous mower, with no architectural changes required. The research surfaces concrete configuration values, library choices, hardware recommendations, and one important correction to the Phase 3 baseline.
+All seven research phases for the Release 1 MVP are complete. The investigation confirms that the proposed architecture (Pixhawk Cube Orange + ArduPilot Rover + ArduSimple **simpleRTK3B Heading** (Septentrio mosaic-H) + dual back-driveable servos + dual SiK radios + Jetson AGX Orin) is technically sound for a residential 4-acre RTK-only autonomous mower, with no architectural changes required. The research surfaces concrete configuration values, library choices, hardware recommendations, and one important correction to the Phase 3 baseline.
 
-> 🔄 **Hardware update (2026-04-17): two CALT GHW38 200 mm rubber-roller wheel encoders (200 PPR, push-pull quadrature output) will be added to the Cube Orange.** Mounting: each roller pressed against one drive-wheel tire → measures **true ground speed** (not just axle rotation), which enables wheel-slip detection (axle-driven hydrostatic torque vs. actual ground motion) and improves dead-reckoning when RTK degrades. **This supersedes the Phase 3 assumption "No wheel encoders for MVP (speed feedback from GPS only)."** Drives ArduPilot wheel-odometry params: `WENC_TYPE=1` / `WENC2_TYPE=1` (Quadrature), `WENC_CPR=800` and `WENC2_CPR=800` (200 PPR × 4 quadrature decode), `WENC_RADIUS=0.100` / `WENC2_RADIUS=0.100` (200 mm wheel → 0.100 m radius), `WENC_PINA/PINB` and `WENC2_PINA/PINB` set to free Cube Orange AUX pins (with `BRD_PWM_COUNT` reduced to free those AUX pins for GPIO), and `EK3_SRC1_VELXY=6` (use wheel encoders as primary horizontal-velocity source) once calibrated. **Electrical caveat:** GHW38 push-pull output level equals supply voltage — if powered at 12 V from the mower battery, the A/B signals must be level-shifted to 3.3 V before reaching the Cube Orange AUX inputs (recommended: bidirectional level shifter or simple resistor divider; Pixhawk AUX pins are NOT 12 V tolerant). Powering the encoders at 5 V is also viable but still exceeds 3.3 V — **level shifting is mandatory either way**. New Open Questions: AUX pin assignment for the 4 encoder lines (all 6 AUX pins are free since the three engine/blade relays use MAIN outputs `SERVO5/6/7`), encoder-to-tire pre-load force tuning, and `BRD_PWM_COUNT` value that converts the chosen AUX pins from PWM to GPIO for `WENC_PINA/PINB`.
+> 🔄 **Hardware update (2026-04-17): two CALT GHW38 200 mm rubber-roller wheel encoders (200 PPR, push-pull quadrature output) will be added to the Cube Orange.** Mounting: each roller pressed against one drive-wheel tire → measures **true ground speed** (not just axle rotation), which enables wheel-slip detection (axle-driven hydrostatic torque vs. actual ground motion) and improves dead-reckoning when RTK degrades. **This supersedes the Phase 3 assumption "No wheel encoders for MVP (speed feedback from GPS only)."** Drives ArduPilot wheel-odometry params: `WENC_TYPE=1` / `WENC2_TYPE=1` (Quadrature), `WENC_CPR=800` and `WENC2_CPR=800` (200 PPR × 4 quadrature decode), `WENC_RADIUS=0.100` / `WENC2_RADIUS=0.100` (200 mm wheel → 0.100 m radius), `WENC_PINA/PINB` and `WENC2_PINA/PINB` set to free Cube Orange AUX pins (with `BRD_PWM_COUNT` reduced to free those AUX pins for GPIO), and `EK3_SRC1_VELXY=6` (use wheel encoders as primary horizontal-velocity source) once calibrated. **Electrical caveat:** GHW38 push-pull output level equals supply voltage — if powered at 12 V from the mower battery, the A/B signals must be level-shifted to 3.3 V before reaching the Cube Orange AUX inputs (recommended: bidirectional level shifter or simple resistor divider; Pixhawk AUX pins are NOT 12 V tolerant). Powering the encoders at 5 V is also viable but still exceeds 3.3 V — **level shifting is mandatory either way**. New Open Questions: AUX pin assignment for the 4 encoder lines (5 of 6 AUX pins are now allocated — 4 for wheel-encoder A/B × 2 and 1 for `RPM1` engine pickup — leaving 1 spare), encoder-to-tire pre-load force tuning, and `BRD_PWM_COUNT` value that converts the chosen AUX pins from PWM to GPIO for `WENC_PINA/PINB`.
 >
 > 🔄 **Hardware update (2026-04-17): An existing servo-signal-driven ignition cutoff relay is already installed on the mower, intended for emergency engine cutoff.** It accepts a standard 1000–2000 µs PWM control signal and is **fail-safe** (no signal / power loss = engine OFF, kill grounded). **Two additional servo-signal relays are also wired directly to Cube Orange MAIN servo outputs (not AUX): a starter motor relay (momentary — pulse-high to crank) and a blade clutch (PTO) relay (fail-safe OFF — no signal = blade disengaged).** Together these give the FC three independent engine/blade control outputs over standard PWM with no add-on hardware. This **supersedes the Bosch-style 30 A SPDT relay (~$10) BOM line** in the Overview and Phase 7 §3 — no add-on relay is required for the engine-kill path. Wire each relay's PWM input to a free Cube Orange MAIN `SERVOn` output (steering uses `SERVO1`/`SERVO3`, leaving `SERVO2`/`SERVO4`–`SERVO8` available; e.g. `SERVO5`=ignition-kill, `SERVO6`=starter, `SERVO7`=blade-clutch) configured with `SERVOn_FUNCTION=-1` (RCPassThru) or driven via `MAV_CMD_DO_SET_SERVO` from missions / `mower safe-stop` / `mower start-engine` / `mower blade`. **Because the relays use MAIN outputs, all 6 AUX pins (`SERVO9`–`SERVO14`) remain free — plenty for the 4 wheel-encoder inputs (A/B × 2) plus 2 spare AUX.** The physical E-stop button still grounds the ignition relay's signal line directly (or breaks its supply) so the cutoff is independent of the flight controller. The Phase 7 safe-stop architecture, defense-in-depth precedence, and spring-return-to-neutral chain are otherwise unchanged. **See the 🔄 callout at the top of Phase 7 §3 for details.**
 >
 > 🔄 **Hardware update (2026-04-17): GNSS receiver changed from simpleRTK2B+heading (dual u-blox ZED-F9P with moving-baseline RTK) to simpleRTK3B Heading (single Septentrio mosaic-H with internal dual-antenna attitude).** This is a major architectural change for Phase 3 §4 (GPS / RTK params): single GPS driver instead of two; SBF protocol instead of u-blox MB; heading computed inside the mosaic and exposed to ArduPilot via SBF `AttEuler`. The Phase 4 base-station design (simpleRTK2B Budget streaming RTCM3 over SiK) is unchanged — RTCM3 is interoperable; the rover chip swap does not affect base-station hardware. ✅ **ArduSimple publishes an official ArduPilot integration tutorial for this exact board** ([ardusimple.com/ardupilot-simplertk3b-heading-configuration](https://www.ardusimple.com/ardupilot-simplertk3b-heading-configuration/)), so integration risk is low. **See the 🔄 callout at the top of Phase 3 §4 for the superseded vs. new parameter table.** Older inline mentions of "simpleRTK2B+heading" and dual-F9P throughout phases 2–4 are retained for traceability of the original recommendation.
+>
+> 🔄 **Hardware update (2026-04-19): An FrSky RC receiver is now wired directly to the Cube Orange for manual override and on-handset telemetry display.** The receiver carries operator stick inputs into ArduPilot (RCIN/SBUS or a serial port for FPort) and ArduPilot pushes FrSky telemetry (mode, RTK fix, battery, RSSI, etc.) back through the receiver to the operator's FrSky transmitter. **This supersedes the Phase 3 / Phase 7 "GCS-only operation" assumption and the specific values `FS_THR_ENABLE=0` and `RC_PROTOCOLS=0`.** Re-research is required before re-locking the baseline: pick `RC_PROTOCOLS` for the chosen FrSky receiver, pick the FrSky telemetry serial protocol (`SERIALn_PROTOCOL=4` for FrSky D, `=10` for SPort, `=23` for FPort), and define an RC failsafe (`FS_THR_ENABLE`, `FS_THR_VALUE`) that triggers Hold on link loss with the same authority as the GCS failsafe. Autonomous mowing still runs from the saved mission via MAVLink; the FrSky transmitter is for manual takeover and at-handset status. The physical E-stop retains absolute authority over both RC and GCS. The "no RC" callouts elsewhere in this document (Key Findings #3, Cross-Cutting Patterns "GCS-only operation", Actionable Conclusions "Update Phase 3 baseline", and the SITL verification Open Question) are retained for traceability but are **no longer authoritative** on the RC parameters.
+>
+> 🔄 **Hardware update (2026-04-19): Engine state monitoring via inductive RPM pickup + bus voltage, with blade-clutch interlock.** Two complementary signals detect whether the Kawasaki FR691V engine is running: (a) **system bus voltage** from the existing Cube Orange power module (`BATTERY_STATUS`) — alternator running reads ~13.5–14.4 V vs. ~12.4–12.7 V battery-only; zero new hardware required; (b) **inductive RPM pickup** clamped on the spark plug lead, conditioned and opto-isolated to 3.3 V, wired to a Cube Orange AUX pin configured as ArduPilot `RPM1` (`RPM1_TYPE=2`, `RPM1_PIN` = chosen AUX pin). **Engine-running = RPM ≥ idle threshold (~1500–1700 for the governed FR691V) AND voltage ≥ alternator threshold (~13.2 V), with agreement cross-check.** The RPM pickup is the authoritative signal for safety interlocks; voltage is the degraded-but-usable fallback if the RPM signal is lost. **AUX pins are NOT 5 V/12 V tolerant — opto-isolation / level-shifting to 3.3 V is mandatory** (same rule as the GHW38 wheel encoders; the spark-lead environment is electrically nasty — an opto on the input side is strongly recommended). **Blade-clutch interlock:** `SERVO7` blade clutch engagement is gated on confirmed engine-running (RPM ≥ threshold AND stable for N seconds); if RPM drops below threshold for >N ms during a run, trigger Hold and disengage blade clutch. This adds new pre-flight checks (PF-34 engine RPM, PF-35 bus voltage / alternator), new hardware detection output (engine state), and new Open Questions (RPM pickup module selection, AUX pin assignment for `RPM1_PIN`, `RPM1_SCALING` calibration, idle threshold for FR691V, blade-clutch interlock timing thresholds). **The AUX pin budget is updated:** 4 pins for wheel encoders + 1 pin for `RPM1` = 5 of 6 AUX pins used, 1 spare.
 
 ### Key Findings Summary
 
@@ -37,7 +41,7 @@ All seven research phases for the Release 1 MVP are complete. The investigation 
 
 6. **Mission planning uses a dual-format approach** — YAML mission definition (source of truth, Git-versionable) → generated `.waypoints` (ArduPilot upload + Mission Planner QA) + GeoJSON (visualization). **Shapely + pyproj custom boustrophedon implementation is recommended for MVP** (fits uv/pipx packaging); Fields2Cover is the upgrade path for complex field shapes. **ArduPilot Rover has native pivot-turn support** (`WP_PIVOT_ANGLE=60`) — coverage planner emits straight-line pass endpoints only; no explicit headland-turn waypoints needed.
 
-7. **Pre-flight is a 6-tier / 33-check inventory** with CRITICAL vs. WARN levels and structured JSON output. **Hold (not RTL) is the correct default failsafe for a mower** — RTL drives in a straight line potentially through obstacles. **Physical E-stop has absolute authority** — cuts ignition + servo power via hardware relay; ArduPilot cannot override. **`FS_OPTIONS=1` is critical** — without it, failsafes are silently ignored once the vehicle is already in Hold mode.
+7. **Pre-flight is a 6-tier / 36-check inventory** with CRITICAL vs. WARN levels and structured JSON output. **Hold (not RTL) is the correct default failsafe for a mower** — RTL drives in a straight line potentially through obstacles. **Physical E-stop has absolute authority** — cuts ignition + servo power via hardware relay; ArduPilot cannot override. **`FS_OPTIONS=1` is critical** — without it, failsafes are silently ignored once the vehicle is already in Hold mode. **Engine-running is a pre-flight gate (PF-34/35/36):** RPM ≥ idle threshold via `RPM1` inductive pickup + bus voltage ≥ alternator threshold via `BATTERY_STATUS`, with agreement cross-check.
 
 ### Cross-Cutting Patterns
 
@@ -54,13 +58,15 @@ All seven research phases for the Release 1 MVP are complete. The investigation 
 - **Update Phase 3 baseline** before planning: `FS_THR_ENABLE=0`, `RC_PROTOCOLS=0`, add `FS_OPTIONS=1`, `FS_CRASH_CHECK=2`, `CRASH_ANGLE=30`, `FS_EKF_ACTION=2`.
 - **Use Shapely + pyproj for coverage planning, not Fields2Cover** — fits the uv/pipx packaging constraint and runs natively on Windows. Keep Fields2Cover as a documented upgrade path.
 - **Use a dual-format mission file** (YAML source → `.waypoints` + GeoJSON outputs).
-- **Hardware bill of materials is firm enough to commit:** ArduSimple **simpleRTK3B Heading (Septentrio mosaic-H, ~$874 USD)** rover — single-board solution with two antenna inputs, replaces the originally-recommended dual-F9P simpleRTK2B+heading; simpleRTK2B Budget base ($215, unchanged — RTCM3 is interoperable); 2× **matched** multi-band L1/L2/E5b GNSS antennas with **identical cable lengths** (e.g. simpleANT2B Budget Survey ~$111 each, NOT included with the heading board); **ASMC-04A Robot Servo High Torque 12–24 V × 2 (SELECTED)** — PWM control + back-driveable gears confirmed; **CALT GHW38 200 mm rubber-roller wheel encoders × 2 (200 PPR, push-pull quadrature)** — pressed against drive-wheel tires for true ground-speed measurement; level shifter required (12 V or 5 V encoder output → 3.3 V FC AUX pins); Schneider XB4-BS8442 mushroom E-stop (~$20); ~~Bosch-style 30 A SPDT relay (~$10)~~ **superseded — existing PWM-driven ignition cutoff relay already on mower (fail-safe, 1000–2000 µs control); no add-on relay needed**; 2× SiK radios on rover (constraint C-11) + 1 paired on laptop + 1 paired on base.
+- **Hardware bill of materials is firm enough to commit:** ArduSimple **simpleRTK3B Heading (Septentrio mosaic-H, ~$874 USD)** rover — single-board solution with two antenna inputs, replaces the originally-recommended dual-F9P simpleRTK2B+heading; simpleRTK2B Budget base ($215, unchanged — RTCM3 is interoperable); 2× **matched** multi-band L1/L2/E5b GNSS antennas with **identical cable lengths** (e.g. simpleANT2B Budget Survey ~$111 each, NOT included with the heading board); **ASMC-04A Robot Servo High Torque 12–24 V × 2 (SELECTED)** — PWM control + back-driveable gears confirmed; **CALT GHW38 200 mm rubber-roller wheel encoders × 2 (200 PPR, push-pull quadrature)** — pressed against drive-wheel tires for true ground-speed measurement; level shifter required (12 V or 5 V encoder output → 3.3 V FC AUX pins); **inductive RPM pickup module** (small-engine tach type for Kawasaki FR691V spark plug lead) + opto-isolator/level-shifter to 3.3 V for Cube Orange AUX pin (`RPM1`); Schneider XB4-BS8442 mushroom E-stop (~$20); ~~Bosch-style 30 A SPDT relay (~$10)~~ **superseded — existing PWM-driven ignition cutoff relay already on mower (fail-safe, 1000–2000 µs control); no add-on relay needed**; 2× SiK radios on rover (constraint C-11) + 1 paired on laptop + 1 paired on base.
 - **Plan SITL test fixtures from the start** — every CLI command should have a SITL-mode dry-run path (especially `mower servo-cal` and `mower preflight`).
 - **The Phase 1 SITL constraint flows everywhere:** SITL is for smoke-testing CLI behavior, not for tuning ArduPilot. The planner should not propose any tuning workflow that depends on SITL fidelity.
 
 ### Open Questions (for planning + field validation)
 
 These are the residual gaps that the planner should plan around or that require field validation during MVP execution:
+
+- **⚠️ FrSky RC baseline re-research (BLOCKING for param re-lock, added 2026-04-19):** The FrSky RC receiver addition supersedes the GCS-only assumption (`FS_THR_ENABLE=0`, `RC_PROTOCOLS=0`) that runs through the Phase 3 consolidated baseline YAML, the Phase 7 §10 updated failsafe baseline, and the "GCS-only operation" cross-cutting pattern. The following values are **unknown and must be determined** before the baseline is re-locked: (a) `RC_PROTOCOLS` for the chosen FrSky receiver (SBUS or FPort); (b) `SERIALn_PROTOCOL` for FrSky telemetry (`=4` for D, `=10` for SPort, `=23` for FPort) and which `SERIALn` port; (c) `FS_THR_ENABLE` and `FS_THR_VALUE` so loss-of-RC-link triggers Hold (same authority as GCS failsafe); (d) any interaction with `FS_OPTIONS` bits. The planner should treat RC-related params as TBD placeholders until this re-research is done. Pre-flight check PF-26 (failsafe params) must be updated to include the RC failsafe values once determined.
 
 - **⚠️ ASMC-04A datasheet capture (non-blocking, integration-time):** control interface confirmed as standard 1000–2000 µs PWM (wires directly to Cube Orange `SERVO1`/`SERVO3`); gear type confirmed back-driveable (safe-stop chain intact). Still useful to capture for sizing/tuning: stall/continuous torque at 12 V and 24 V, no-load speed, travel range, current draw, position-feedback resolution, IP rating, connector pinout, inrush current, PWM pulse-width range / dead-band, and holding-torque behavior under engine vibration.
 - **Z254-specific physical measurements:** lever force (spring-scale at handle, dampers removed), linkage geometry that achieves 78–98 mm servo throw covering full lever range (with ASMC-04A mounting + arm), Kawasaki FR691V ignition kill wire identification.
@@ -70,6 +76,9 @@ These are the residual gaps that the planner should plan around or that require 
 - **Mission item count ceiling on Cube Orange** with the deployed firmware version (estimated 700+; needs confirmation).
 - **Hardware sourcing:** SiK radio pair purchase (separately or with ArduSimple kit), high-current servo BEC selection (2-4 A per Savox SB2290SG at 7.4 V).
 - **Power budget verification:** servo BEC at 7.4 V or use Torxis at 12 V from mower battery. **Selected ASMC-04A is 12–24 V native off the mower battery — no high-current 7.4 V BEC needed; size inline fuse per ASMC-04A current spec.**
+- **Engine RPM pickup module selection (new, 2026-04-19):** small-engine inductive tach pickup clamped on FR691V spark plug lead — module must tolerate the electrically noisy mower-deck environment; output must be conditioned and opto-isolated to 3.3 V for the Cube Orange AUX pin. Candidates: Tiny Tach / SenDEC-style inductive modules, or a custom coil + LM393 comparator + 6N137 opto. The FR691V is a V-twin with wasted-spark ignition — pulses-per-revolution depend on which plug lead is clamped; calibrate `RPM1_SCALING` against a handheld tach.
+- **Engine RPM ArduPilot params (new, 2026-04-19):** `RPM1_TYPE=2` (PWM/pin input), `RPM1_PIN` (AUX pin — must be one of `SERVO9`–`SERVO14` that is not already assigned to wheel encoders; 5 of 6 AUX pins now in use, 1 spare), `RPM1_SCALING` (pulses-per-rev; field-calibrate), `BRD_PWM_COUNT` interaction (pin must be GPIO, not PWM). Verify the RPM MAVLink message (`RPM`, msg 226) flows to the GCS at a useful rate.
+- **Blade-clutch interlock thresholds (new, 2026-04-19):** RPM idle threshold for the FR691V governed idle (~1700 RPM; use ~1500 as the "engine running" floor), voltage threshold (~13.2 V), RPM stability window before blade engage (N seconds), RPM-drop timeout before Hold + blade disengage (N ms). All require field calibration — not SITL-testable.
 
 ## Objectives
 
@@ -81,6 +90,7 @@ These are the residual gaps that the planner should plan around or that require 
 - Choose a mission file format (Mission Planner `.waypoints` reuse vs. custom YAML) and a coverage-pattern generation source for a 54" deck.
 - Design the pre-flight check inventory and the safe-stop mechanism (physical E-stop + software RTL + Jetson clean shutdown interaction model).
 - Characterize RTCM-over-SiK link health (bandwidth fit, monitoring, fix-degradation behavior).
+- Identify engine state sensing approach (RPM pickup + bus voltage) and blade-clutch interlock design for safe autonomous blade engagement.
 
 ## Research Phases
 
@@ -509,14 +519,14 @@ conn.mav.param_request_read_send(conn.target_system, conn.target_component,
 p = conn.recv_match(type='PARAM_VALUE', blocking=True, timeout=5)
 ```
 
-#### 4. Jetson Orin Nano Super (SSH-based)
+#### 4. Jetson AGX Orin (SSH-based)
 
 Detect via SSH from the Windows PC:
 
 ```python
 def detect_jetson(host="jetson.local"):
     info = {}
-    # Model: /proc/device-tree/model → "NVIDIA Jetson Orin Nano"
+    # Model: /proc/device-tree/model → "NVIDIA Jetson AGX Orin"
     # JetPack/L4T: /etc/nv_tegra_release → "# R36 (release), REVISION: 4.0, ..."
     # tegrastats availability: which tegrastats
     # Memory: free -h
@@ -2051,7 +2061,7 @@ Tier 5: Mission & Geofence        (~2 s)
 Tier 6: Safety Systems            (~2 s)
 ```
 
-#### Complete check table (33 checks)
+#### Complete check table (36 checks)
 
 | # | Check | Tier | Level | Source | Pass criteria | Fail action |
 |---|---|---|---|---|---|---|
@@ -2059,7 +2069,7 @@ Tier 6: Safety Systems            (~2 s)
 | PF-02 | Not armed | 1 | CRITICAL | `HEARTBEAT.base_mode` | `MAV_MODE_FLAG_SAFETY_ARMED` not set | Abort — already armed |
 | PF-03 | Firmware version | 1 | WARN | `AUTOPILOT_VERSION` | `flight_sw_version` ≥ 4.5.0 | Warn |
 | PF-04 | GPS1 detected | 1 | CRITICAL | `GPS_RAW_INT` | Received; `fix_type` ≥ 3 | Abort |
-| PF-05 | GPS2 detected | 1 | CRITICAL | `GPS2_RAW` | Received | Abort |
+| PF-05 | GPS2 detected | 1 | CRITICAL | `GPS2_RAW` | Received | Abort | ⚠️ **mosaic-H: `GPS2_TYPE=0` — this check becomes N/A; replace with mosaic SBF health (e.g. `ReceiverStatus` or single-GPS `GPS_RAW_INT` quality)** |
 | PF-06 | Servo outputs present | 1 | CRITICAL | `SERVO_OUTPUT_RAW` | Ch1 + Ch3 within ±50 µs of TRIM | Abort |
 | PF-07 | SiK link quality | 1 | WARN | `RADIO_STATUS` | rssi>50, remrssi>50, rxerrors<10 | Warn |
 | PF-08 | Jetson reachable | 1 | WARN | SSH probe | Connect within 5 s | Warn (non-blocking MVP) |
@@ -2072,13 +2082,13 @@ Tier 6: Safety Systems            (~2 s)
 | PF-15 | RTK fix quality | 3 | CRITICAL | `GPS_RAW_INT` | `fix_type` == 6 for ≥5 consecutive samples over ≥5 s | Abort |
 | PF-16 | Position accuracy | 3 | CRITICAL | `GPS_RAW_INT.h_acc` | < 50 mm | Abort |
 | PF-17 | Dual-antenna heading | 3 | CRITICAL | `GPS_RAW_INT.yaw` | ∉ {0, 65535} | Abort |
-| PF-18 | MB ambiguity resolved | 3 | CRITICAL | `GPS2_RTK.iar_num_hypotheses` | == 1 | Abort |
+| PF-18 | MB ambiguity resolved | 3 | CRITICAL | `GPS2_RTK.iar_num_hypotheses` | == 1 | Abort | ⚠️ **mosaic-H: no GPS2_RTK message; heading quality comes from `GPS_RAW_INT.yaw` + `GPS_RAW_INT.hdg_acc` via SBF `AttEuler`; replace with heading-accuracy threshold check** |
 | PF-19 | RTCM flowing | 3 | CRITICAL | `GPS_RTK.rtk_rate` | > 0 | Abort |
 | PF-20 | Heading accuracy | 3 | WARN | `GPS_RAW_INT.hdg_acc` | < 200 (2.0°) | Warn |
 | PF-21 | Satellite count | 3 | WARN | `GPS_RAW_INT.satellites_visible` | ≥ 10 | Warn |
 | PF-22 | Params match baseline | 4 | CRITICAL | Param batch read | Critical params match (table below) | Abort — config drift |
 | PF-23 | Servo functions correct | 4 | CRITICAL | `SERVO1/3_FUNCTION` | == 73 / == 74 | Abort |
-| PF-24 | GPS type correct | 4 | CRITICAL | `GPS1/2_TYPE` | == 17 / == 18 | Abort |
+| PF-24 | GPS type correct | 4 | CRITICAL | `GPS1/2_TYPE` | == 17 / == 18 | Abort | ⚠️ **mosaic-H: check `GPS1_TYPE == 10` and `GPS2_TYPE == 0` instead** |
 | PF-25 | EKF yaw source | 4 | CRITICAL | `EK3_SRC1_YAW` | == 2 (GPS) | Abort |
 | PF-26 | Failsafe params set | 4 | CRITICAL | Batch read | `FS_ACTION≥1`, `FS_GCS_ENABLE≥1`, `FENCE_ENABLE==1` | Abort |
 | PF-27 | Mission loaded | 5 | CRITICAL | `MISSION_COUNT` | count ≥ 2 | Abort |
@@ -2088,6 +2098,9 @@ Tier 6: Safety Systems            (~2 s)
 | PF-31 | ArduPilot pre-arm clear | 6 | CRITICAL | Try arm + `STATUSTEXT` | No pre-arm failure messages | Abort — surface AP failures |
 | PF-32 | E-stop circuit armed | 6 | WARN | Operator confirmation | Operator confirms | Warn |
 | PF-33 | Servo neutral verified | 6 | WARN | `SERVO_OUTPUT_RAW` | Within ±20 µs of calibrated TRIM | Warn |
+| PF-34 | Engine RPM detected | 2 | CRITICAL | `RPM` (msg 226) | RPM ≥ idle threshold (~1500) for ≥ 3 consecutive samples | Abort — engine not running or RPM pickup fault |
+| PF-35 | Bus voltage ≥ alternator | 2 | WARN | `BATTERY_STATUS.voltage` | ≥ 13.2 V (alternator charging) | Warn — voltage alone is not authoritative; cross-check with PF-34 |
+| PF-36 | RPM–voltage agreement | 2 | WARN | PF-34 + PF-35 | Both indicate engine-running, or both indicate engine-off | Warn — disagreement suggests sensor fault |
 
 #### Critical parameter baseline comparison (PF-22)
 
@@ -2095,8 +2108,8 @@ Tier 6: Safety Systems            (~2 s)
 |---|---|---|---|
 | `SERVO1_FUNCTION` | 73 | exact | Wrong = no steering |
 | `SERVO3_FUNCTION` | 74 | exact | Wrong = no steering |
-| `GPS1_TYPE` | 17 | exact | Wrong = no RTK heading |
-| `GPS2_TYPE` | 18 | exact | Wrong = no RTK heading |
+| `GPS1_TYPE` | 17 | exact | Wrong = no RTK heading | ⚠️ **mosaic-H: expect 10, not 17** |
+| `GPS2_TYPE` | 18 | exact | Wrong = no RTK heading | ⚠️ **mosaic-H: expect 0, not 18** |
 | `EK3_SRC1_YAW` | 2 | exact | Wrong yaw source = no heading |
 | `FS_ACTION` | ≥1 | min | 0 = failsafe disabled |
 | `FS_GCS_ENABLE` | ≥1 | min | 0 = GCS failsafe off |
@@ -2119,6 +2132,7 @@ Three independent stop mechanisms form a defense-in-depth architecture. **Physic
 ├─────────────────────────────────────────────────────────────┤
 │  LEVEL 1: ARDUPILOT DISARM / HOLD                          │
 │  ► FC sets servo outputs to TRIM → levers neutral          │
+│  ► Blade clutch disengaged (SERVO7 → fail-safe PWM)        │
 │  ► Engine continues running                                │
 ├─────────────────────────────────────────────────────────────┤
 │  LEVEL 2: SOFTWARE RTL / SmartRTL                          │
@@ -2262,8 +2276,9 @@ RC_PROTOCOLS: 1
 | Crash detected (stuck) | FS_CRASH_CHECK → Hold + Disarm | Servos to TRIM, levers neutral | Walk to mower, clear obstruction, re-arm |
 | EKF failure | FS_EKF_ACTION → Hold | Stops in place | Wait for EKF recovery or E-stop |
 | Operator presses E-stop | Engine dies, servos lose power | Springs return levers to neutral | Twist-release E-stop, follow recovery |
-| `mower safe-stop` | Mode change → Hold + Disarm | Servos to TRIM, engine running | Follow recovery procedure |
+| `mower safe-stop` | Mode change → Hold + Disarm | Servos to TRIM, blade clutch disengaged, engine running | Follow recovery procedure |
 | Tilt > 30° | CRASH_ANGLE → Hold + Disarm | Vehicle stopped (likely tipped) | E-stop; assess damage |
+| Engine RPM loss during run | Tooling monitors `RPM` msg; triggers Hold + blade disengage | Blade clutch off; vehicle stops; engine may have stalled | Walk to mower; check engine; restart if safe; `mower preflight` |
 
 ### 5. Software Safe-Stop Command (`mower safe-stop`)
 
@@ -2273,9 +2288,18 @@ mower safe-stop [--mode hold|rtl|smartrtl] [--disarm] [--jetson-shutdown]
 Default: --mode hold --disarm
 ```
 
+> 🔄 **Engine monitoring update (2026-04-19):** `mower safe-stop` now also disengages the blade clutch (`SERVO7` → fail-safe PWM) as an explicit step before disarming. The blade-clutch interlock also monitors RPM during a mission: if RPM drops below the engine-running threshold for >N ms, the tooling triggers Hold + blade disengage autonomously (independent of safe-stop). The `mower blade {on|off}` command gates `SERVO7` engagement on confirmed engine-running (RPM ≥ threshold AND stable for N seconds).
+
 ```python
 def safe_stop(mav, mode="hold", disarm=True, jetson_shutdown=False):
     log.critical("safe_stop_initiated", mode=mode, disarm=disarm)
+
+    # Step 0: Disengage blade clutch immediately (fail-safe OFF)
+    mav.mav.command_long_send(
+        mav.target_system, mav.target_component,
+        mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
+        0, 7, BLADE_CLUTCH_OFF_PWM, 0, 0, 0, 0, 0)  # SERVO7 → disengage
+    log.info("blade_clutch_disengaged")
 
     mode_map = {
         "hold":     mavutil.mavlink.MAV_MODE_HOLD,
@@ -2533,7 +2557,7 @@ BRD_SAFETY_DEFLT: 0      # No safety switch (Z254 has none)
 - **`FS_THR_ENABLE` must be 0 for GCS-only operation** — Phase 3 had it at 1, which would cause immediate RC failsafe with no RC transmitter connected. Combined with `RC_PROTOCOLS=0`. *(This is a correction to the Phase 3 baseline.)*
 - **`FS_OPTIONS=1` is critical** — without it, failsafes are silently IGNORED while in Hold mode, so a GCS link loss after entering Hold is invisible to the operator.
 - **`FS_CRASH_CHECK=2` (Hold + Disarm) and `CRASH_ANGLE=30`** provide stuck-vehicle and tip-over protection for a heavy mower.
-- Pre-flight is organized in **6 tiers / 33 checks** (CRITICAL vs. WARN levels) covering HW connectivity, sensor health, RTK convergence, config integrity, mission/geofence, and safety systems.
+- Pre-flight is organized in **6 tiers / 36 checks** (CRITICAL vs. WARN levels) covering HW connectivity, sensor health (including engine RPM + bus voltage), RTK convergence, config integrity, mission/geofence, and safety systems.
 - **ArduPilot built-in pre-arm checks should be leveraged, not duplicated** — attempt arm, capture STATUSTEXT failure messages, surface alongside custom checks.
 - **`mower preflight --quick`** enables 5-10 s recovery re-check after software stops by skipping hardware detection and RTK convergence wait.
 - **Jetson and ArduPilot are operationally independent for MVP** — Jetson crash does not affect mowing; ArduPilot disarm does not affect Jetson. This changes in Release 3 when VSLAM enters the EKF.
@@ -2574,23 +2598,11 @@ BRD_SAFETY_DEFLT: 0      # No safety switch (Z254 has none)
 - Source E-stop hardware: Schneider XB4-BS8442 mushroom button + 30 A SPDT relay.
 - Design the E-stop wiring harness (relay + kill wire + GPIO notification to Pixhawk via `RCx_OPTION=31`).
 - Consider `ARMING_MIS_ITEMS` to require an RTL item at mission end.
-- Build a SITL-based preflight test fixture exercising all 33 checks (with simulated GPS fix, fence breach, etc.).
+- Build a SITL-based preflight test fixture exercising all 36 checks (with simulated GPS fix, fence breach, etc.).
 
 ## Overview
 
-_Synthesized summary across all phases. Will be written after all phases complete._
-
-## Key Findings
-
-_To be populated after all phases complete._
-
-## Actionable Conclusions
-
-_To be populated after all phases complete._
-
-## Open Questions
-
-_To be populated after all phases complete._
+See the [synthesized Overview](#overview) section at the top of this document (after the Introduction), which contains: Key Findings Summary, Cross-Cutting Patterns, Actionable Conclusions, and Open Questions. That section is the authoritative synthesis of all seven research phases.
 
 ## Standards Applied
 
@@ -2704,7 +2716,17 @@ _To be populated after all phases complete._
 - Source E-stop hardware: Schneider XB4-BS8442 mushroom button (IP65, NC, twist-release) + Bosch-style 30 A SPDT relay
 - Design E-stop wiring harness (relay + kill wire + GPIO notification to Pixhawk via `RCx_OPTION=31`)
 - Consider `ARMING_MIS_ITEMS` to require an RTL item at mission end
-- Build a SITL-based preflight test fixture exercising all 33 checks
+- Build a SITL-based preflight test fixture exercising all 36 checks
+
+### From Engine Monitoring (added 2026-04-19)
+- **RPM pickup module selection:** evaluate small-engine inductive tach candidates (Tiny Tach / SenDEC-style vs. custom coil + LM393 comparator + 6N137 opto-isolator); must tolerate Kawasaki FR691V spark-lead EMI environment
+- **AUX pin assignment for `RPM1_PIN`:** allocate from the remaining AUX budget (4 pins for wheel encoders, 1 for RPM, 1 spare); set `BRD_PWM_COUNT` to expose the chosen pin as GPIO
+- **`RPM1_SCALING` calibration:** FR691V is a V-twin with wasted-spark ignition — pulses-per-revolution depend on which plug lead is clamped; field-calibrate against a handheld tach to determine correct scaling factor
+- **Idle RPM threshold determination:** governed idle is ~1700 RPM; determine stable "engine running" floor (~1500) via field measurement across warm/cold conditions
+- **Alternator voltage threshold determination:** measure bus voltage at idle and at governed max RPM; set threshold (~13.2 V) that reliably distinguishes alternator-running from battery-only
+- **Blade-clutch interlock timing thresholds:** RPM stability window before blade engage (N seconds), RPM-drop timeout before Hold + blade disengage (N ms) — requires field testing to avoid false trips from momentary RPM dips during PTO engagement or load transients
+- **EMI immunity verification:** confirm RPM signal integrity with blade clutch engaged (PTO adds electrical noise) and at varying RPM ranges; the mower-deck environment (starter solenoid, ignition, PTO clutch) is electrically hostile
+- **Opto-isolator module selection:** confirm a pre-built 6N137-based opto module (e.g. common 3.3 V optocoupler breakout) works for the conditioned tach signal, or whether a custom board is needed
 
 ## Handoff
 

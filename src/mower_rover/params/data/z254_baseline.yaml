@@ -1,0 +1,134 @@
+# Husqvarna Z254 zero-turn mower — ArduPilot Rover baseline parameter set.
+#
+# Source: docs/research/001-mvp-bringup-rtk-mowing.md, Phase 3 "Consolidated
+# Baseline Parameter Set" with the Phase 7 corrections applied:
+#   - FS_THR_ENABLE = 0  (no RC transmitter; was 1 in Phase 3)
+#   - RC_PROTOCOLS  = 0  (disable RC; was unset)
+#   - FS_OPTIONS    = 1  (failsafes active even in Hold)
+#   - FS_CRASH_CHECK / CRASH_ANGLE / FS_EKF_ACTION carried from Phase 7
+#
+# ⚠️ SUPERSEDED (2026-04-19): An FrSky RC receiver is now wired directly to
+# the Cube Orange (decision log #26 in the vision doc). The two values below
+# are NO LONGER CORRECT and must be re-research'd before this baseline is
+# applied to real hardware:
+#   - FS_THR_ENABLE = 0     → must be set so loss-of-FrSky-link triggers Hold
+#   - RC_PROTOCOLS  = 0     → must be set to the FrSky variant in use (SBUS / FPort)
+# Additionally, a SERIALn_PROTOCOL must be assigned for FrSky telemetry
+# (4 = FrSky D, 10 = FrSky SPort, 23 = FPort). FS_OPTIONS=1 still applies.
+# See FR-15 and constraint C-12 in the vision doc.
+#
+# GNSS section reflects the simpleRTK3B Heading (Septentrio mosaic-H, single
+# SBF driver) — NOT the originally-recommended dual-F9P moving-baseline config.
+#
+# Values marked "MEASURE on vehicle" in the research are present here as 0.0
+# placeholders so the snapshot/diff machinery sees them; replace with measured
+# values before committing to a per-vehicle profile.
+
+# --- Frame & Board -----------------------------------------------------------
+FRAME_CLASS: 1                # Rover (not Boat=2, BalanceBot=3)
+BRD_SAFETY_DEFLT: 0           # Z254 has no safety switch
+
+# --- Skid-steer servo functions ---------------------------------------------
+SERVO1_FUNCTION: 73           # ThrottleLeft  (k_throttleLeft)
+SERVO1_MIN: 1000
+SERVO1_MAX: 2000
+SERVO1_TRIM: 1500
+SERVO1_REVERSED: 0            # VERIFY on vehicle (mower servo-cal)
+SERVO3_FUNCTION: 74           # ThrottleRight (k_throttleRight)
+SERVO3_MIN: 1000
+SERVO3_MAX: 2000
+SERVO3_TRIM: 1500
+SERVO3_REVERSED: 0            # VERIFY on vehicle (mower servo-cal)
+
+# --- Motor / mixing ---------------------------------------------------------
+MOT_THR_MAX: 100
+MOT_THR_MIN: 0                # TUNE for hydrostatic deadband (5-15% typical)
+MOT_SLEWRATE: 100             # %/s; reduce to 40-60 if linkage is jerky
+MOT_PWM_TYPE: 0               # Normal PWM
+MOT_SAFE_DISARM: 0            # Output trim (neutral) when disarmed
+PILOT_STEER_TYPE: 0           # Default mixing in Manual mode
+
+# --- AHRS / EKF -------------------------------------------------------------
+AHRS_EKF_TYPE: 3              # EKF3 (required for GPS yaw)
+AHRS_ORIENTATION: 0           # Normal upright
+EK2_ENABLE: 0
+EK3_ENABLE: 1
+
+# --- GNSS — simpleRTK3B Heading (Septentrio mosaic-H, SBF) ------------------
+GPS1_TYPE: 10                 # SBF (Septentrio Binary Format)
+GPS2_TYPE: 0                  # No second receiver on the rover
+GPS_AUTO_CONFIG: 0            # Pre-configure mosaic via Septentrio Web UI
+GPS_AUTO_SWITCH: 0            # Single GPS (no blending)
+GPS_RATE_MS: 200              # 5 Hz
+SERIAL3_PROTOCOL: 5           # GPS
+SERIAL3_BAUD: 230             # 230400 baud (mosaic-H SBF @ 5-10 Hz)
+
+# --- GPS antenna offsets (MEASURE on vehicle) -------------------------------
+GPS1_POS_X: 0.0
+GPS1_POS_Y: 0.0
+GPS1_POS_Z: 0.0
+
+# --- EKF3 sources -----------------------------------------------------------
+EK3_SRC1_POSXY: 1             # GPS
+EK3_SRC1_VELXY: 1             # GPS  (switch to 6 = wheel encoders post-cal)
+EK3_SRC1_POSZ: 1              # Baro
+EK3_SRC1_VELZ: 1              # GPS
+EK3_SRC1_YAW: 2               # GPS dual-antenna yaw
+
+# --- Compass disabled for heading (Z254 has heavy magnetic interference) ----
+COMPASS_USE: 0
+COMPASS_USE2: 0
+COMPASS_USE3: 0
+
+# --- Telemetry --------------------------------------------------------------
+SERIAL1_PROTOCOL: 2           # MAVLink2 — SiK Radio B → laptop
+SERIAL2_PROTOCOL: 2           # MAVLink2 — spare
+
+# --- RC (FrSky receiver — ⚠️ value below SUPERSEDED, see header note) -------
+RC_PROTOCOLS: 0
+
+# --- Steering PID -----------------------------------------------------------
+ATC_STR_RAT_FF: 0.20          # Primary tuning knob (skid-steer << Ackermann 0.75)
+ATC_STR_RAT_P: 0.04
+ATC_STR_RAT_I: 0.04
+ATC_STR_RAT_D: 0.00
+ATC_STR_RAT_MAX: 90           # deg/s
+ACRO_TURN_RATE: 90
+
+# --- Speed PID --------------------------------------------------------------
+ATC_SPEED_P: 0.10
+ATC_SPEED_I: 0.05
+ATC_SPEED_D: 0.00
+ATC_SPEED_FF: 0.00
+ATC_ACCEL_MAX: 2.0            # m/s² — conservative for heavy mower
+ATC_DECEL_MAX: 0.0            # = ACCEL_MAX
+ATC_TURN_MAX_G: 0.30
+
+# --- Cruise & navigation ----------------------------------------------------
+CRUISE_SPEED: 2.0             # ~4.5 mph mowing
+CRUISE_THROTTLE: 50           # Starting guess; refine via "Learn Cruise"
+WP_SPEED: 2.0
+WP_RADIUS: 1.0
+WP_OVERSHOOT: 1.0
+WP_PIVOT_ANGLE: 60            # Trigger pivot turn at >60 deg
+WP_PIVOT_RATE: 45             # deg/s pivot rate
+
+# --- Failsafe (Phase 7 corrections applied) ---------------------------------
+FS_ACTION: 2                  # Hold (NOT RTL — RTL drives in straight line)
+FS_TIMEOUT: 1.5
+FS_THR_ENABLE: 0              # ⚠️ SUPERSEDED — FrSky receiver added; must be reconfigured for RC failsafe
+FS_GCS_ENABLE: 1              # GCS heartbeat failsafe (critical)
+FS_GCS_TIMEOUT: 5
+FS_CRASH_CHECK: 2             # Hold on crash (Phase 7)
+CRASH_ANGLE: 30               # deg from upright (Phase 7)
+FS_EKF_ACTION: 2              # Hold on EKF failure
+FS_EKF_THRESH: 0.8
+FS_OPTIONS: 1                 # Failsafes active even when already in Hold mode
+RTL_SPEED: 0                  # Use WP_SPEED
+
+# --- Geofence ---------------------------------------------------------------
+FENCE_ACTION: 2               # Hold on breach
+
+# --- Arming -----------------------------------------------------------------
+ARMING_REQUIRE: 1
+ARMING_NEED_LOC: 1            # Require GPS fix before arming

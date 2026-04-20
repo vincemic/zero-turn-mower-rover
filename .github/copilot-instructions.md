@@ -15,10 +15,12 @@ Authoritative project docs (read these before designing or coding anything new):
 - GNSS: **ArduSimple simpleRTK3B Heading** (Septentrio mosaic-H, SBF protocol, dual-antenna heading). The vision still says "simpleRTK2B+heading" — research superseded that; treat the mosaic-H as ground truth.
 - Base station: **simpleRTK2B Budget** streaming RTCM3 over a dedicated SiK radio link (no NTRIP, no internet in the field).
 - Telemetry: **two SiK radios on the rover** — Radio A = RTCM passthrough (`MAVLINK=0`), Radio B = MAVLink to laptop (`MAVLINK=1`).
+- Manual control + on-handset telemetry: **FrSky RC receiver wired directly to the Cube Orange** (RCIN for SBUS, or a Pixhawk serial port for FPort), with **bidirectional FrSky telemetry** (S.Port / FPort) carried back to the operator's FrSky transmitter so flight state, mode, RTK fix, battery, etc. show on the handset display. The receiver is for **manual override and at-handset monitoring**, not for replacing GCS/MAVLink mission control. Autonomous mowing still runs from a saved mission via MAVLink; the operator can take manual control at any time via a mode switch on the FrSky transmitter.
 - Steering: **2× ASMC-04A Robot Servo (12–24 V, PWM, back-driveable)** wired to Cube Orange MAIN `SERVO1` / `SERVO3`. Back-driveability is part of the safety chain — do not propose non-back-driveable alternatives.
 - Engine/blade I/O: three existing PWM-driven relays on Cube Orange MAIN outputs (e.g. `SERVO5` ignition-kill (fail-safe), `SERVO6` starter (momentary), `SERVO7` blade clutch (fail-safe)). All AUX pins (`SERVO9`–`SERVO14`) remain free.
+- Engine monitoring: **inductive RPM pickup** on Kawasaki FR691V spark plug lead (conditioned + opto-isolated to 3.3 V) on a Cube Orange AUX pin via ArduPilot `RPM1`, **plus** bus voltage from the existing power module (`BATTERY_STATUS`). Engine-running = RPM ≥ idle threshold AND voltage ≥ alternator threshold. Level-shifting / opto-isolation is **mandatory** (same 3.3 V AUX rule as encoders). Blade clutch (`SERVO7`) engagement is interlocked on confirmed engine-running.
 - Wheel encoders: **2× CALT GHW38** (200 PPR quadrature, push-pull) on Cube Orange AUX pins; **level-shifting 5/12 V → 3.3 V is mandatory** — AUX pins are NOT 5 V or 12 V tolerant.
-- Companion: **NVIDIA Jetson Orin Nano Super (8 GB, JetPack/Ubuntu, aarch64)** + **Luxonis OAK-D Pro** over USB via DepthAI.
+- Companion: **NVIDIA Jetson AGX Orin (JetPack/Ubuntu, aarch64)** + **Luxonis OAK-D Pro** over USB via DepthAI.
 - Operator workstation: **Windows laptop** (cross-platform tooling required).
 - Safety: **physical E-stop has absolute authority** (cuts ignition + servo power via hardware relay). Software cannot override it. Spring-return-to-neutral on the levers is the mechanical half of the safety chain.
 
@@ -43,7 +45,7 @@ Authoritative project docs (read these before designing or coding anything new):
 
 - **CLI surface** is `mower <subcommand>` on the laptop and `mower-jetson <subcommand>` on the Jetson. Both share one library package.
 - **Every actuator-touching command** goes through the safety primitive: explicit confirmation prompt + `--dry-run` mode + central safe-stop hook. No exceptions.
-- **No RC transmitter** during autonomous mowing. Baseline params include `FS_THR_ENABLE=0`, `RC_PROTOCOLS=0`, `FS_GCS_ENABLE=1`, `FS_OPTIONS=1`. Do not propose RC-failsafe-based designs.
+- **RC is present for manual override and on-handset telemetry**, not as the primary control path. ArduPilot's RC stack is **enabled** (`RC_PROTOCOLS` set to the FrSky protocol in use, e.g. SBUS or FPort), an **RC failsafe is configured** so loss of the FrSky link triggers the same Hold-mode safe stop as a GCS failsafe, and a **FrSky telemetry serial port is configured** (`SERIALn_PROTOCOL=4` for FrSky D, `=10` for FrSky SPort, or `=23` for FPort, depending on the receiver). The autonomous mowing mission still runs from MAVLink/GCS; the FrSky transmitter is for the operator to (a) take manual control from any range the handset can reach and (b) read live status without needing the laptop. **The physical E-stop still has absolute authority over both RC and GCS.** Specific RC/failsafe parameter values are pending re-research — the prior `FS_THR_ENABLE=0` / `RC_PROTOCOLS=0` baseline is **superseded** by this hardware change and should not be treated as authoritative.
 - **Default mower failsafe = Hold, not RTL.** RTL drives in a straight line through obstacles. Use `FENCE_ACTION=2`, `FS_EKF_ACTION=2`.
 - **Per-side calibration is mandatory.** Left and right hydrostatic levers are not symmetric. `mower servo-cal` produces independent `SERVO1` and `SERVO3` profiles (TRIM, MIN, MAX, REVERSED, forward/reverse deadband).
 - **GPS yaw, not magnetometer.** `EK3_SRC1_YAW=2`, `COMPASS_USE=0`. Do not propose magnetometer calibration utilities.
@@ -69,7 +71,7 @@ On Windows, run SITL via **WSL2** (preferred) or Docker. Cygwin is deprecated.
 ## Working with the docs
 
 - The vision is the contract for *what* and *why*. The research is the contract for *how* (with concrete parameter values, library choices, and confirmed hardware).
-- Where vision and research disagree, **research wins** (notably: GNSS receiver, ignition relay, wheel encoders, and the corrections to `FS_THR_ENABLE` / `RC_PROTOCOLS` / `FS_OPTIONS`).
+- Where vision and research disagree, **research wins** (notably: GNSS receiver, ignition relay, wheel encoders, and the corrections to `FS_THR_ENABLE` / `RC_PROTOCOLS` / `FS_OPTIONS`). **Exception:** the FrSky RC receiver addition (decided 2026-04-19, after the original research) supersedes the prior "no RC" guidance — RC parameters and the RC failsafe behavior need a follow-up research pass before the baseline is re-locked.
 - Phases are dependency-ordered. Do not propose work that skips a dependency without calling it out.
 - Open Questions in the research doc are **not** invitations to invent answers — flag them as needing field validation or operator input.
 

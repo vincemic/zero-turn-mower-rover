@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from mower_rover.config.laptop import JetsonEndpoint
+from mower_rover.transport.ssh import JetsonClient, SshError
+
+
+@pytest.fixture
+def endpoint() -> JetsonEndpoint:
+    return JetsonEndpoint(host="rover.lan", user="mower", port=2222, key_path=Path("/keys/id"))
+
+
+def test_build_ssh_argv_includes_security_options(endpoint: JetsonEndpoint) -> None:
+    client = JetsonClient(
+        endpoint, ssh_binary="C:/fake/ssh.exe", scp_binary="C:/fake/scp.exe"
+    )
+    argv = client.build_ssh_argv(["uname", "-a"])
+    assert argv[0] == "C:/fake/ssh.exe"
+    assert "-o" in argv and "StrictHostKeyChecking=accept-new" in argv
+    assert "BatchMode=yes" in argv
+    assert "PasswordAuthentication=no" in argv
+    assert "-i" in argv and str(endpoint.key_path) in argv
+    assert "-p" in argv and "2222" in argv
+    assert argv[-3:] == ["mower@rover.lan", "uname", "-a"]
+
+
+def test_build_scp_pull_argv(endpoint: JetsonEndpoint) -> None:
+    client = JetsonClient(
+        endpoint, ssh_binary="C:/fake/ssh.exe", scp_binary="C:/fake/scp.exe"
+    )
+    argv = client.build_scp_pull_argv("/tmp/log.bin", Path("C:/local/log.bin"))
+    assert argv[0] == "C:/fake/scp.exe"
+    assert "-P" in argv and "2222" in argv
+    assert "mower@rover.lan:/tmp/log.bin" in argv
+    assert str(Path("C:/local/log.bin")) in argv
+
+
+def test_strict_host_keys_validation(endpoint: JetsonEndpoint) -> None:
+    with pytest.raises(ValueError):
+        JetsonClient(endpoint, strict_host_keys="bogus")
+
+
+def test_missing_ssh_binary_raises(endpoint: JetsonEndpoint) -> None:
+    with patch("mower_rover.transport.ssh.shutil.which", return_value=None):
+        client = JetsonClient(endpoint)
+    with pytest.raises(SshError, match="ssh"):
+        client.build_ssh_argv(["whoami"])
+    with pytest.raises(SshError, match="scp"):
+        client.build_scp_pull_argv("/x", Path("/y"))
+
+
+def test_run_propagates_correlation_id(endpoint: JetsonEndpoint) -> None:
+    client = JetsonClient(
+        endpoint,
+        correlation_id="abc123def456",
+        ssh_binary="ssh",
+        scp_binary="scp",
+    )
+    fake = MagicMock(returncode=0, stdout="ok\n", stderr="")
+    with patch("mower_rover.transport.ssh.subprocess.run", return_value=fake) as run_mock:
+        result = client.run(["whoami"])
+    assert result.ok
+    assert result.stdout == "ok\n"
+    _, kwargs = run_mock.call_args
+    assert kwargs["env"]["MOWER_CORRELATION_ID"] == "abc123def456"
+
+
+def test_run_check_raises_on_nonzero(endpoint: JetsonEndpoint) -> None:
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    fake = MagicMock(returncode=2, stdout="", stderr="boom")
+    with (
+        patch("mower_rover.transport.ssh.subprocess.run", return_value=fake),
+        pytest.raises(SshError, match="exit 2"),
+    ):
+        client.run(["false"], check=True)
+
+
+def test_run_timeout_raises_ssh_error(endpoint: JetsonEndpoint) -> None:
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    with (
+        patch(
+            "mower_rover.transport.ssh.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=1.0),
+        ),
+        pytest.raises(SshError, match="timed out"),
+    ):
+        client.run(["sleep", "5"], timeout=1.0)
+
+
+def test_pull_failure_raises(endpoint: JetsonEndpoint, tmp_path: Path) -> None:
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    fake = MagicMock(returncode=1, stdout="", stderr="No such file")
+    with (
+        patch("mower_rover.transport.ssh.subprocess.run", return_value=fake),
+        pytest.raises(SshError, match="No such file"),
+    ):
+        client.pull("/nope", tmp_path / "out.bin")
