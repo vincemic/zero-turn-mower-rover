@@ -9,6 +9,9 @@ from typer.testing import CliRunner
 
 from mower_rover.cli.jetson import app as jetson_app
 from mower_rover.cli.laptop import app as laptop_app
+from mower_rover.health.power import PowerState
+from mower_rover.health.thermal import ThermalSnapshot, ThermalZone
+from mower_rover.probe.registry import CheckResult, Severity, Status
 
 
 @pytest.fixture
@@ -238,3 +241,151 @@ def test_laptop_jetson_run_env_var_endpoint(
         )
     assert result.exit_code == 0, result.output
     assert "envuser@envhost" in result.output
+
+
+# --- probe command -----------------------------------------------------------
+
+
+def test_probe_help(runner: CliRunner) -> None:
+    result = runner.invoke(jetson_app, ["probe", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "probe" in result.stdout.lower()
+
+
+def test_probe_json_with_monkeypatched_results(runner: CliRunner) -> None:
+    canned = [
+        CheckResult(name="python_ver", status=Status.PASS, severity=Severity.CRITICAL, detail="3.11.5"),
+        CheckResult(name="disk", status=Status.FAIL, severity=Severity.WARNING, detail="disk low"),
+    ]
+    with patch("mower_rover.cli.jetson.run_checks", return_value=canned):
+        result = runner.invoke(jetson_app, ["probe", "--json"])
+    assert result.exit_code == 1  # WARNING severity → exit 1
+    payload = json.loads(result.stdout)
+    assert len(payload) == 2
+    assert payload[0]["name"] == "python_ver"
+    assert payload[0]["status"] == "pass"
+    assert payload[1]["status"] == "fail"
+
+
+def test_probe_all_pass(runner: CliRunner) -> None:
+    canned = [
+        CheckResult(name="a", status=Status.PASS, severity=Severity.INFO, detail="ok"),
+    ]
+    with patch("mower_rover.cli.jetson.run_checks", return_value=canned):
+        result = runner.invoke(jetson_app, ["probe"])
+    assert result.exit_code == 0
+
+
+def test_probe_check_filter(runner: CliRunner) -> None:
+    canned = [
+        CheckResult(name="disk", status=Status.PASS, severity=Severity.WARNING, detail="ok"),
+    ]
+    with patch("mower_rover.cli.jetson.run_checks", return_value=canned) as mock_run:
+        result = runner.invoke(jetson_app, ["probe", "--check", "disk"])
+    assert result.exit_code == 0
+    mock_run.assert_called_once_with(sysroot=Path("/"), only=frozenset({"disk"}))
+
+
+# --- thermal command ---------------------------------------------------------
+
+
+def test_thermal_help(runner: CliRunner) -> None:
+    result = runner.invoke(jetson_app, ["thermal", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "thermal" in result.stdout.lower()
+
+
+def test_thermal_json(runner: CliRunner) -> None:
+    snapshot = ThermalSnapshot(
+        zones=[
+            ThermalZone(index=0, name="CPU-therm", temp_c=45.5),
+            ThermalZone(index=1, name="GPU-therm", temp_c=72.0),
+        ],
+        timestamp="2026-04-22T00:00:00+00:00",
+    )
+    with patch("mower_rover.cli.jetson.read_thermal_zones", return_value=snapshot):
+        result = runner.invoke(jetson_app, ["thermal", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert len(payload["zones"]) == 2
+    assert payload["zones"][0]["name"] == "CPU-therm"
+
+
+def test_thermal_table(runner: CliRunner) -> None:
+    snapshot = ThermalSnapshot(
+        zones=[ThermalZone(index=0, name="CPU-therm", temp_c=50.0)],
+        timestamp="2026-04-22T00:00:00+00:00",
+    )
+    with patch("mower_rover.cli.jetson.read_thermal_zones", return_value=snapshot):
+        result = runner.invoke(jetson_app, ["thermal"])
+    assert result.exit_code == 0, result.output
+    assert "CPU-therm" in result.stdout
+
+
+# --- power command -----------------------------------------------------------
+
+
+def test_power_help(runner: CliRunner) -> None:
+    result = runner.invoke(jetson_app, ["power", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "power" in result.stdout.lower()
+
+
+def test_power_json(runner: CliRunner) -> None:
+    state = PowerState(
+        mode_id=0,
+        mode_name="MAXN",
+        online_cpus=12,
+        gpu_freq_mhz=1300,
+        fan_profile="cool",
+        timestamp="2026-04-22T00:00:00+00:00",
+    )
+    with patch("mower_rover.cli.jetson.read_power_state", return_value=state):
+        result = runner.invoke(jetson_app, ["power", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["mode_name"] == "MAXN"
+    assert payload["online_cpus"] == 12
+
+
+def test_power_table(runner: CliRunner) -> None:
+    state = PowerState(
+        mode_id=0,
+        mode_name="MAXN",
+        online_cpus=12,
+        gpu_freq_mhz=1300,
+        fan_profile="cool",
+        timestamp="2026-04-22T00:00:00+00:00",
+    )
+    with patch("mower_rover.cli.jetson.read_power_state", return_value=state):
+        result = runner.invoke(jetson_app, ["power"])
+    assert result.exit_code == 0, result.output
+    assert "MAXN" in result.stdout
+
+
+# --- info new fields ---------------------------------------------------------
+
+
+def test_info_json_has_new_fields(runner: CliRunner) -> None:
+    with (
+        patch("mower_rover.cli.jetson.read_disk_usage", return_value=[]),
+        patch(
+            "mower_rover.cli.jetson.read_power_state",
+            return_value=PowerState(
+                mode_id=0, mode_name="MAXN", online_cpus=12,
+                gpu_freq_mhz=1300, fan_profile="cool",
+                timestamp="2026-04-22T00:00:00+00:00",
+            ),
+        ),
+        patch("mower_rover.cli.jetson._read_cuda_version", return_value="12.2"),
+        patch("mower_rover.cli.jetson._detect_oakd", return_value=False),
+    ):
+        result = runner.invoke(jetson_app, ["info", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert "cuda_version" in payload
+    assert payload["cuda_version"] == "12.2"
+    assert "nvme_present" in payload
+    assert "power_mode" in payload
+    assert payload["power_mode"] == "MAXN"
+    assert "oakd_detected" in payload

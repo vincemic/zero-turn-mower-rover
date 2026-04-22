@@ -1,10 +1,13 @@
 """`mower-jetson` CLI — Jetson Orin-side entry point.
 
 Subcommands ship as Release 1 progresses (log collection, OAK-D detect,
-VSLAM bring-up). For Phase 3 we provide:
+VSLAM bring-up). Current commands:
 
 - `mower-jetson info`         — platform identity (hostname, kernel, JetPack release).
 - `mower-jetson config show`  — print the resolved Jetson YAML config.
+- `mower-jetson probe`        — run pre-flight probe checks.
+- `mower-jetson thermal`      — live thermal zone monitor.
+- `mower-jetson power`        — power / performance state snapshot.
 
 Install convention: `pipx install .` on JetPack Ubuntu (aarch64). Systemd
 units are intentionally deferred until a phase needs one.
@@ -15,11 +18,18 @@ from __future__ import annotations
 import json as _json
 import os
 import platform
+import shutil
 import socket
+import subprocess
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import typer
+from rich.console import Console
+from rich.live import Live
+from rich.panel import Panel
+from rich.table import Table
 
 from mower_rover import __version__
 from mower_rover.config.jetson import (
@@ -27,7 +37,14 @@ from mower_rover.config.jetson import (
     JetsonConfigError,
     load_jetson_config,
 )
+from mower_rover.health.disk import read_disk_usage
+from mower_rover.health.power import PowerState, read_power_state
+from mower_rover.health.thermal import ThermalSnapshot, read_thermal_zones
 from mower_rover.logging_setup.setup import configure_logging, get_logger
+from mower_rover.probe.registry import CheckResult, Severity, Status, derive_exit_code, run_checks
+from mower_rover.safety.confirm import ConfirmationAborted, SafetyContext
+from mower_rover.service.daemon import run_daemon
+from mower_rover.service.unit import UNIT_NAME, install_service, uninstall_service
 
 app = typer.Typer(
     name="mower-jetson",
@@ -36,6 +53,9 @@ app = typer.Typer(
 )
 config_app = typer.Typer(name="config", help="Inspect Jetson-side config.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
+
+service_app = typer.Typer(name="service", help="Manage the mower-health systemd service.", no_args_is_help=True)
+app.add_typer(service_app, name="service")
 
 
 @app.callback()
@@ -85,6 +105,10 @@ class PlatformInfo:
     python_version: str
     jetpack_release: str | None = None
     is_jetson: bool = False
+    cuda_version: str | None = None
+    nvme_present: bool = False
+    power_mode: str | None = None
+    oakd_detected: bool = False
     warnings: list[str] = field(default_factory=list)
 
 
@@ -97,8 +121,52 @@ def _read_jetpack_release() -> str | None:
         return None
 
 
+def _read_cuda_version() -> str | None:
+    """Try ``nvcc --version`` to extract CUDA version string."""
+    if shutil.which("nvcc") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["nvcc", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    # Example line: "Cuda compilation tools, release 12.2, V12.2.140"
+    import re
+
+    for line in result.stdout.splitlines():
+        m = re.search(r"release\s+([\d.]+)", line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _detect_oakd() -> bool:
+    """Check if a Luxonis OAK-D device is present by scanning USB vendor IDs."""
+    # Luxonis USB vendor ID is 03e7
+    usb_devices = Path("/sys/bus/usb/devices")
+    if not usb_devices.is_dir():
+        return False
+    for vendor_file in usb_devices.glob("*/idVendor"):
+        try:
+            vid = vendor_file.read_text(encoding="utf-8").strip().lower()
+            if vid == "03e7":
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _collect_platform_info() -> PlatformInfo:
     jp = _read_jetpack_release()
+    disk_usage = read_disk_usage()
+    nvme_present = any(d.is_nvme for d in disk_usage)
+    power = read_power_state()
     info = PlatformInfo(
         package_version=__version__,
         hostname=socket.gethostname(),
@@ -109,6 +177,10 @@ def _collect_platform_info() -> PlatformInfo:
         python_version=platform.python_version(),
         jetpack_release=jp,
         is_jetson=jp is not None,
+        cuda_version=_read_cuda_version(),
+        nvme_present=nvme_present,
+        power_mode=power.mode_name,
+        oakd_detected=_detect_oakd(),
     )
     if not info.is_jetson and info.machine.lower() != "aarch64":
         info.warnings.append(
@@ -134,6 +206,10 @@ def info_command(
     typer.echo(f"python     : {info.python_version}")
     typer.echo(f"jetpack    : {info.jetpack_release or '-'}")
     typer.echo(f"is_jetson  : {'yes' if info.is_jetson else 'no'}")
+    typer.echo(f"cuda       : {info.cuda_version or '-'}")
+    typer.echo(f"nvme       : {'yes' if info.nvme_present else 'no'}")
+    typer.echo(f"power_mode : {info.power_mode or '-'}")
+    typer.echo(f"oakd       : {'yes' if info.oakd_detected else 'no'}")
     for w in info.warnings:
         typer.echo(f"WARN: {w}", err=True)
 
@@ -174,6 +250,278 @@ def config_show_command(
     typer.echo(f"exists : {payload['exists']}")
     for k, v in merged.items():
         typer.echo(f"  {k} = {v}")
+
+
+# --- probe -------------------------------------------------------------------
+
+_STATUS_EMOJI = {
+    Status.PASS: "\u2705",   # ✅
+    Status.FAIL: "\u274c",   # ❌
+    Status.SKIP: "\u23ed\ufe0f",  # ⏭️
+}
+
+
+@app.command("probe")
+def probe_command(
+    ctx: typer.Context,
+    check: list[str] | None = typer.Option(None, "--check", help="Run only named checks."),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Run pre-flight probe checks on the Jetson."""
+    log = get_logger("cli-jetson").bind(op="probe")
+
+    # Import checks to trigger @register decorators.
+    import mower_rover.probe.checks  # noqa: F401
+
+    only = frozenset(check) if check else None
+    results = run_checks(sysroot=Path("/"), only=only)
+    log.info("probe_complete", count=len(results))
+
+    if json_out:
+        payload = [
+            {
+                "name": r.name,
+                "status": r.status.value,
+                "severity": r.severity.value,
+                "detail": r.detail,
+            }
+            for r in results
+        ]
+        typer.echo(_json.dumps(payload, indent=2))
+        raise typer.Exit(code=derive_exit_code(results))
+
+    console = Console()
+    table = Table(title="Probe Results")
+    table.add_column("Check")
+    table.add_column("Status")
+    table.add_column("Severity")
+    table.add_column("Detail")
+    for r in results:
+        emoji = _STATUS_EMOJI.get(r.status, "?")
+        table.add_row(r.name, emoji, r.severity.value, r.detail)
+    console.print(table)
+
+    raise typer.Exit(code=derive_exit_code(results))
+
+
+# --- thermal -----------------------------------------------------------------
+
+def _thermal_color(temp_c: float) -> str:
+    if temp_c >= 95.0:
+        return "red"
+    if temp_c >= 70.0:
+        return "yellow"
+    return "green"
+
+
+def _render_thermal_table(snapshot: ThermalSnapshot) -> Table:
+    table = Table(title=f"Thermal Zones  ({snapshot.timestamp})")
+    table.add_column("Zone")
+    table.add_column("Temp °C", justify="right")
+    for z in snapshot.zones:
+        color = _thermal_color(z.temp_c)
+        table.add_row(z.name or f"zone{z.index}", f"[{color}]{z.temp_c:.1f}[/{color}]")
+    return table
+
+
+@app.command("thermal")
+def thermal_command(
+    ctx: typer.Context,
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    watch: bool = typer.Option(False, "--watch", help="Continuously refresh."),
+    interval: float = typer.Option(2.0, "--interval", help="Refresh interval in seconds."),
+) -> None:
+    """Monitor thermal zones."""
+    log = get_logger("cli-jetson").bind(op="thermal")
+
+    if json_out:
+        snapshot = read_thermal_zones()
+        log.info("thermal_read", zones=len(snapshot.zones))
+        typer.echo(_json.dumps(asdict(snapshot), indent=2))
+        return
+
+    if watch:
+        console = Console()
+        try:
+            with Live(console=console, refresh_per_second=1) as live:
+                while True:
+                    snapshot = read_thermal_zones()
+                    live.update(_render_thermal_table(snapshot))
+                    time.sleep(interval)
+        except KeyboardInterrupt:
+            pass
+        return
+
+    snapshot = read_thermal_zones()
+    log.info("thermal_read", zones=len(snapshot.zones))
+    Console().print(_render_thermal_table(snapshot))
+
+
+# --- power -------------------------------------------------------------------
+
+def _render_power_panel(state: PowerState) -> Panel:
+    lines = [
+        f"Mode       : {state.mode_name or '-'} (ID: {state.mode_id if state.mode_id is not None else '-'})",
+        f"Online CPUs: {state.online_cpus if state.online_cpus is not None else '-'}",
+        f"GPU Freq   : {f'{state.gpu_freq_mhz} MHz' if state.gpu_freq_mhz is not None else '-'}",
+        f"Fan Profile: {state.fan_profile or '-'}",
+        f"Timestamp  : {state.timestamp}",
+    ]
+    return Panel("\n".join(lines), title="Power State")
+
+
+@app.command("power")
+def power_command(
+    ctx: typer.Context,
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    watch: bool = typer.Option(False, "--watch", help="Continuously refresh."),
+    interval: float = typer.Option(2.0, "--interval", help="Refresh interval in seconds."),
+) -> None:
+    """Display Jetson power / performance state."""
+    log = get_logger("cli-jetson").bind(op="power")
+
+    if json_out:
+        state = read_power_state()
+        log.info("power_read", mode=state.mode_name)
+        typer.echo(_json.dumps(asdict(state), indent=2))
+        return
+
+    if watch:
+        console = Console()
+        try:
+            with Live(console=console, refresh_per_second=1) as live:
+                while True:
+                    state = read_power_state()
+                    live.update(_render_power_panel(state))
+                    time.sleep(interval)
+        except KeyboardInterrupt:
+            pass
+        return
+
+    state = read_power_state()
+    log.info("power_read", mode=state.mode_name)
+    Console().print(_render_power_panel(state))
+
+
+# --- service -----------------------------------------------------------------
+
+
+@service_app.command("install")
+def service_install_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Override config path."
+    ),
+) -> None:
+    """Install the mower-health systemd service."""
+    obj = ctx.obj or {}
+    cfg = load_jetson_config(config)
+    level = user_level if user_level is not None else cfg.service_user_level
+    safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
+    try:
+        install_service(safety, user_level=level)
+    except ConfirmationAborted:
+        typer.echo("Aborted.", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@service_app.command("uninstall")
+def service_uninstall_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Override config path."
+    ),
+) -> None:
+    """Uninstall the mower-health systemd service."""
+    obj = ctx.obj or {}
+    cfg = load_jetson_config(config)
+    level = user_level if user_level is not None else cfg.service_user_level
+    safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
+    try:
+        uninstall_service(safety, user_level=level)
+    except ConfirmationAborted:
+        typer.echo("Aborted.", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@service_app.command("start")
+def service_start_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Override config path."
+    ),
+) -> None:
+    """Start the mower-health systemd service."""
+    cfg = load_jetson_config(config)
+    level = user_level if user_level is not None else cfg.service_user_level
+    cmd = ["systemctl"]
+    if level:
+        cmd.append("--user")
+    cmd.extend(["start", f"{UNIT_NAME}.service"])
+    subprocess.run(cmd, check=True)
+    typer.echo("Service started.")
+
+
+@service_app.command("stop")
+def service_stop_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Override config path."
+    ),
+) -> None:
+    """Stop the mower-health systemd service."""
+    cfg = load_jetson_config(config)
+    level = user_level if user_level is not None else cfg.service_user_level
+    cmd = ["systemctl"]
+    if level:
+        cmd.append("--user")
+    cmd.extend(["stop", f"{UNIT_NAME}.service"])
+    subprocess.run(cmd, check=True)
+    typer.echo("Service stopped.")
+
+
+@service_app.command("status")
+def service_status_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Override config path."
+    ),
+) -> None:
+    """Show the mower-health systemd service status."""
+    cfg = load_jetson_config(config)
+    level = user_level if user_level is not None else cfg.service_user_level
+    cmd = ["systemctl"]
+    if level:
+        cmd.append("--user")
+    cmd.extend(["status", f"{UNIT_NAME}.service"])
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    typer.echo(result.stdout)
+    if result.stderr:
+        typer.echo(result.stderr, err=True)
+    raise typer.Exit(code=result.returncode)
+
+
+@service_app.command("run")
+def service_run_command(
+    ctx: typer.Context,
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Override config path."
+    ),
+    health_interval: int | None = typer.Option(
+        None, "--health-interval", help="Health snapshot interval in seconds."
+    ),
+) -> None:
+    """Run the health monitoring daemon (foreground)."""
+    cfg = load_jetson_config(config)
+    interval = health_interval if health_interval is not None else cfg.health_interval_s
+    run_daemon(health_interval_s=interval, sysroot=Path("/"))
 
 
 if __name__ == "__main__":

@@ -29,6 +29,9 @@ dev = [
     "mypy>=1.10",
     "types-PyYAML",
 ]
+jetson = [
+    "sdnotify>=0.3",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -42,6 +45,7 @@ testpaths = ["tests"]
 markers = [
     "sitl: tests that require ArduPilot SITL (rover-skid frame)",
     "field: tests that require physical hardware in the field",
+    "jetson: tests that require a real Jetson device (skip with -m 'not jetson')",
 ]
 addopts = "-ra"
 

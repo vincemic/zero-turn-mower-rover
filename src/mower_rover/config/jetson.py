@@ -42,6 +42,8 @@ class JetsonConfig:
 
     log_dir: Path | None = None
     oakd_required: bool = False
+    health_interval_s: int = 60
+    service_user_level: bool = True
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -57,7 +59,7 @@ class JetsonConfigError(ValueError):
 def _coerce(raw: dict[str, Any]) -> JetsonConfig:
     if not isinstance(raw, dict):
         raise JetsonConfigError(f"top-level YAML must be a mapping, got {type(raw).__name__}")
-    known = {"log_dir", "oakd_required"}
+    known = {"log_dir", "oakd_required", "health_interval_s", "service_user_level"}
     extra = {k: v for k, v in raw.items() if k not in known}
     log_dir_raw = raw.get("log_dir")
     log_dir: Path | None
@@ -72,7 +74,23 @@ def _coerce(raw: dict[str, Any]) -> JetsonConfig:
         raise JetsonConfigError(
             f"oakd_required must be bool, got {type(oakd_required).__name__}"
         )
-    return JetsonConfig(log_dir=log_dir, oakd_required=oakd_required, extra=extra)
+    health_interval_s = raw.get("health_interval_s", 60)
+    if not isinstance(health_interval_s, int) or health_interval_s <= 0:
+        raise JetsonConfigError(
+            f"health_interval_s must be a positive integer, got {health_interval_s!r}"
+        )
+    service_user_level = raw.get("service_user_level", True)
+    if not isinstance(service_user_level, bool):
+        raise JetsonConfigError(
+            f"service_user_level must be bool, got {type(service_user_level).__name__}"
+        )
+    return JetsonConfig(
+        log_dir=log_dir,
+        oakd_required=oakd_required,
+        health_interval_s=health_interval_s,
+        service_user_level=service_user_level,
+        extra=extra,
+    )
 
 
 def load_jetson_config(path: Path | None = None) -> JetsonConfig:

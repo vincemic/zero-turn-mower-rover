@@ -282,4 +282,12 @@ def info_command(
         typer.echo(f"WARN: {w}", err=True)
 
 
+# --- setup ------------------------------------------------------------------
+
+from mower_rover.cli.setup import health_command, setup_command  # noqa: E402
+
+app.command("setup")(setup_command)
+app.command("health")(health_command)
+
+
 __all__ = ["app"]
