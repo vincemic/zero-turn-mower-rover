@@ -135,11 +135,22 @@ harden_openblas() {
 # 6. nvpmodel — set to mode 3 (50W) for OAK-D camera + SLAM workloads
 # ---------------------------------------------------------------------------
 harden_nvpmodel() {
+    # Kill nvpmodel_indicator GUI daemon if running — it holds a lock that
+    # blocks nvpmodel -m changes indefinitely (common on fresh flash before
+    # headless mode takes effect on next boot).
+    if pkill -f nvpmodel_indicator 2>/dev/null; then
+        sleep 2  # let the lock file release
+    fi
+
     # nvpmodel -q output varies; check the mode ID line
     if nvpmodel -q 2>/dev/null | grep -q 'POWER_MODEL ID=3'; then
         STATUS[nvpmodel]="already"
     else
-        nvpmodel -m 3
+        # On JetPack 6.2.2 (L4T 36.5), switching power modes may require a
+        # reboot. Without --force nvpmodel hangs waiting for interactive
+        # confirmation. --force auto-reboots if needed; the hardening script
+        # is idempotent so re-run after reboot will skip completed steps.
+        nvpmodel --force -m 3
         STATUS[nvpmodel]="applied"
     fi
 }

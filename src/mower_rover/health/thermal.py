@@ -55,17 +55,23 @@ def read_thermal_zones(sysroot: Path = Path("/")) -> ThermalSnapshot:
             continue
 
         try:
-            raw_temp = temp_file.read_text(encoding="utf-8").strip()
+            with open(temp_file, "rb") as fh:
+                raw = fh.read()
+            if raw is None:
+                continue
+            raw_temp = raw.decode("utf-8").strip()
             temp_c = int(raw_temp) / 1000.0
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, TypeError) as exc:
             _log.warning("thermal_zone_read_error", path=str(temp_file), error=str(exc))
             continue
 
         name = ""
         if type_file.is_file():
             try:
-                name = type_file.read_text(encoding="utf-8").strip()
-            except OSError:
+                with open(type_file, "rb") as fh:
+                    raw_name = fh.read()
+                name = raw_name.decode("utf-8").strip() if raw_name else zone_dir.name
+            except (OSError, TypeError):
                 name = zone_dir.name
 
         # Extract index from directory name (e.g. "thermal_zone0" → 0).

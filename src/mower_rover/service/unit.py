@@ -20,10 +20,12 @@ _log = get_logger("service.unit")
 
 UNIT_NAME = "mower-health"
 
-_UNIT_TEMPLATE = """\
+_UNIT_TEMPLATE_SYSTEM = """\
 [Unit]
 Description=Mower Rover health monitor daemon
 After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=notify
@@ -34,8 +36,26 @@ WorkingDirectory={home_dir}
 WatchdogSec=30
 Restart=on-failure
 RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+_UNIT_TEMPLATE_USER = """\
+[Unit]
+Description=Mower Rover health monitor daemon
+After=network.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
+
+[Service]
+Type=notify
+ExecStart={exec_start}
+Environment=MOWER_CORRELATION_ID=daemon
+WorkingDirectory={home_dir}
+WatchdogSec=30
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=default.target
@@ -48,12 +68,14 @@ def generate_unit_file(
     user: str,
     home_dir: str,
     health_interval_s: int,
+    user_level: bool = True,
 ) -> str:
     """Return the content of a systemd unit file for the mower-health daemon."""
     exec_start = (
         f"{mower_jetson_path} service run --health-interval {health_interval_s}"
     )
-    return _UNIT_TEMPLATE.format(
+    template = _UNIT_TEMPLATE_USER if user_level else _UNIT_TEMPLATE_SYSTEM
+    return template.format(
         exec_start=exec_start,
         user=user,
         home_dir=home_dir,
@@ -87,7 +109,10 @@ def install_service(ctx: SafetyContext, *, user_level: bool) -> None:
         log.info("dry_run_install_service")
         return
 
-    mower_jetson = shutil.which("mower-jetson") or "mower-jetson"
+    mower_jetson = (
+        shutil.which("mower-jetson")
+        or str(Path.home() / ".local" / "bin" / "mower-jetson")
+    )
     user = getpass.getuser()
     home = str(Path.home())
     cfg = load_jetson_config()
@@ -97,6 +122,7 @@ def install_service(ctx: SafetyContext, *, user_level: bool) -> None:
         user=user,
         home_dir=home,
         health_interval_s=cfg.health_interval_s,
+        user_level=user_level,
     )
 
     target_dir = unit_dir(user_level)

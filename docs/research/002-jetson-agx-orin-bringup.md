@@ -37,6 +37,8 @@ The NVIDIA Jetson AGX Orin developer kit has arrived and needs to be prepared fo
 
 ### 1. JetPack Version Selection
 
+> 🔄 **Superseded 2026-04-23:** JetPack 6.2.1 has been replaced by **JetPack 6.2.2 (L4T 36.5.0)** — see [005-jetson-agx-orin-jetpack6-reflash.md](005-jetson-agx-orin-jetpack6-reflash.md) for the updated recommendation. References to 6.2.1 below are retained for traceability.
+
 **Recommended version: JetPack 6.2.1 (L4T 36.4.4)** — the latest stable release for Jetson AGX Orin as of April 2026.
 
 | Version | L4T | Ubuntu | CUDA | Status for AGX Orin |
@@ -543,8 +545,10 @@ uv stores managed Python in `~/.local/share/uv/python/` and adds `python3.11` to
 
 **Recommended: `uv tool install`** (replaces `pipx`):
 ```bash
-uv tool install --python 3.11 ~/mower-rover/
+uv tool install --python 3.11 --with sdnotify ~/mower-rover/
 ```
+
+> 🔄 **Updated 2026-04-23:** `--with sdnotify` is required so the `mower-health.service` daemon can send `sd_notify(READY=1)` to systemd. Without it, `Type=notify` services hang on start.
 
 This creates an isolated venv (in `~/.local/share/uv/tools/`), installs deps, and symlinks entry points to `~/.local/bin/`. Functionally identical to `pipx install` but eliminates a separate tool dependency.
 
@@ -618,7 +622,7 @@ git clone <repo-url> ~/mower-rover
 # Or: scp -r from laptop
 
 # 5. Install mower-jetson CLI
-uv tool install --python 3.11 ~/mower-rover/
+uv tool install --python 3.11 --with sdnotify ~/mower-rover/
 
 # 6. Verify
 mower-jetson --help
@@ -629,7 +633,7 @@ mower-jetson config show
 
 # After code changes:
 cd ~/mower-rover && git pull
-uv tool install --python 3.11 ~/mower-rover/ --reinstall
+uv tool install --python 3.11 --with sdnotify ~/mower-rover/ --reinstall
 ```
 
 ### Entry Points
@@ -876,9 +880,11 @@ The AGX Orin supports multiple power modes. Key modes for 32GB module:
 
 **Recommendation: Mode 2 (30W, the default).** Provides 8 CPUs at 1728 MHz, 4 GPU TPCs, full memory bandwidth. Adequate for DepthAI + VSLAM + mower-jetson CLI. Stays within 12V mower power budget. Generates less heat than higher modes.
 
+> 🔄 **Overridden 2026-04-23 (field bringup):** Implementation uses **mode 3 (50W)** for additional OAK-D + VSLAM headroom. On L4T 36.5, `nvpmodel -m <N>` hangs without `--force`; the flag triggers an automatic reboot. The `nvpmodel_indicator` GUI daemon must be killed first if the desktop is still running. See `scripts/jetson-harden.sh`.
+
 ```bash
-sudo nvpmodel -q       # Check current mode
-sudo nvpmodel -m 2     # Set 30W (persists across reboots)
+sudo nvpmodel -q           # Check current mode
+sudo nvpmodel --force -m 3  # Set 50W (requires --force on L4T 36.5; auto-reboots)
 ```
 
 ### 2. jetson_clocks

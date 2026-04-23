@@ -15,7 +15,7 @@ Release 2 adds operational tooling on top of the RTK-only MVP: a live mission mo
 
 ## Objectives
 
-- Select an offline TTS engine for the Jetson AGX Orin (aarch64, JetPack 6.2.1) that meets latency, licensing, and resource-contention constraints
+- Select an offline TTS engine for the Jetson AGX Orin (aarch64, JetPack 6.2.2) that meets latency, licensing, and resource-contention constraints
 - Determine USB audio device requirements and ALSA/PulseAudio configuration on headless JetPack
 - Confirm that the live-monitoring MAVLink consumer can coexist on the same SiK link with mission control traffic
 - Identify the Pixhawk DataFlash log pull mechanism and Jetson log paths for the post-run archive
@@ -345,7 +345,7 @@ Needs `libasound2-dev` on the Jetson. Works on aarch64. Recommend subprocess cal
 **Gaps:**
 - Exact Piper synthesis latency on Jetson AGX Orin aarch64 not benchmarked (estimates based on Raspberry Pi 4 arm64 reports; AGX Orin will be faster). Field validation needed.
 - Specific USB audio adapter model compatibility with Jetson AGX Orin not verified (class-compliant USB audio should work, but specific product testing needed).
-- Whether JetPack 6.2.1 headless image includes `alsa-utils` by default or if it needs to be installed separately — needs field verification.
+- Whether JetPack 6.2.2 headless image includes `alsa-utils` by default or if it needs to be installed separately — needs field verification.
 - Volume level needed to overcome Kawasaki FR691V engine noise at operator distance — needs field testing with candidate speaker.
 
 **Assumptions:**
@@ -870,9 +870,9 @@ Release 2 adds three operational capabilities to the MVP: live mission monitorin
 ## Follow-Up Research
 
 ### From Phase 1
-- Field-test Piper arm64 binary on actual Jetson AGX Orin with JetPack 6.2.1 to confirm it runs and measure synthesis latency
+- Field-test Piper arm64 binary on actual Jetson AGX Orin with JetPack 6.2.2 to confirm it runs and measure synthesis latency
 - Field-test USB audio adapter + speaker combination to verify adequate volume over engine noise and USB audio stability
-- Verify `alsa-utils` presence on headless JetPack 6.2.1 image; document install steps if missing
+- Verify `alsa-utils` presence on headless JetPack 6.2.2 image; document install steps if missing
 - Confirm the exact set of MAVLink events/phrases needed (some may require parameterization beyond simple fixed strings)
 
 ### From Phase 2

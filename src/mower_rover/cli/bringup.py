@@ -98,8 +98,8 @@ def _confirm_or_skip(action: str, bctx: BringupContext) -> bool:
 
 def _check_ssh_ok(client: JetsonClient) -> bool:
     try:
-        result = client.run(["true"], timeout=10)
-        return result.ok
+        result = client.run(["echo", "ok"], timeout=30)
+        return result.ok and "ok" in result.stdout
     except SshError:
         return False
 
@@ -149,7 +149,7 @@ def _run_harden(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Running sudo bash jetson-harden.sh…")
     try:
         result = client.run(
-            ["sudo", "bash", "~/jetson-harden.sh"], timeout=120,
+            ["sudo", "bash", "~/jetson-harden.sh"], timeout=1200,
         )
     except SshError as exc:
         bctx.console.print(f"  [red]Hardening failed:[/red] {exc}")
@@ -179,7 +179,7 @@ def _run_harden(client: JetsonClient, bctx: BringupContext) -> None:
 def _uv_installed(client: JetsonClient) -> bool:
     try:
         result = client.run(
-            ["bash", "-c", ". ~/.local/bin/env 2>/dev/null; uv --version"],
+            ["~/.local/bin/uv", "--version"],
             timeout=15,
         )
         return result.ok
@@ -189,9 +189,18 @@ def _uv_installed(client: JetsonClient) -> bool:
 
 def _run_install_uv(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Installing uv…")
+    # Prefer curl, fall back to wget
+    try:
+        has_curl = client.run(["which", "curl"], timeout=10)
+    except SshError:
+        has_curl = None
+    if has_curl and has_curl.ok:
+        dl_cmd = "curl -LsSf https://astral.sh/uv/install.sh | sh"
+    else:
+        dl_cmd = "wget -qO- https://astral.sh/uv/install.sh | sh"
     try:
         result = client.run(
-            ["bash", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+            [dl_cmd],
             timeout=120,
         )
     except SshError as exc:
@@ -206,7 +215,7 @@ def _run_install_uv(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Installing Python 3.11 via uv…")
     try:
         result = client.run(
-            ["bash", "-c", ". ~/.local/bin/env && uv python install 3.11"],
+            ["~/.local/bin/uv", "python", "install", "3.11"],
             timeout=300,
         )
     except SshError as exc:
@@ -227,7 +236,7 @@ def _run_install_uv(client: JetsonClient, bctx: BringupContext) -> None:
 def _cli_installed(client: JetsonClient) -> bool:
     try:
         result = client.run(
-            ["bash", "-c", ". ~/.local/bin/env 2>/dev/null; mower-jetson --version"],
+            ["~/.local/bin/mower-jetson", "--version"],
             timeout=15,
         )
         return result.ok
@@ -280,8 +289,8 @@ def _run_install_cli(client: JetsonClient, bctx: BringupContext) -> None:
     try:
         result = client.run(
             [
-                "bash", "-c",
-                f". ~/.local/bin/env && uv tool install --python 3.11 --force ~/{whl_name}",
+                f"~/.local/bin/uv tool install --python 3.11 --force"
+                f" --with sdnotify ~/{whl_name}",
             ],
             timeout=300,
         )
@@ -312,7 +321,7 @@ def _run_verify(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Running remote probe…")
     try:
         result = client.run(
-            ["bash", "-c", ". ~/.local/bin/env 2>/dev/null; mower-jetson probe --json"],
+            ["~/.local/bin/mower-jetson", "probe", "--json"],
             timeout=30,
         )
     except SshError as exc:
@@ -383,8 +392,7 @@ def _run_service(client: JetsonClient, bctx: BringupContext) -> None:
     try:
         result = client.run(
             [
-                "bash", "-c",
-                ". ~/.local/bin/env 2>/dev/null; mower-jetson service install --yes",
+                "~/.local/bin/mower-jetson service install --yes",
             ],
             timeout=60,
         )
@@ -401,10 +409,9 @@ def _run_service(client: JetsonClient, bctx: BringupContext) -> None:
     try:
         result = client.run(
             [
-                "bash", "-c",
-                ". ~/.local/bin/env 2>/dev/null; mower-jetson service start --yes",
+                "~/.local/bin/mower-jetson service start",
             ],
-            timeout=60,
+            timeout=120,
         )
     except SshError as exc:
         bctx.console.print(f"  [red]Service start failed:[/red] {exc}")

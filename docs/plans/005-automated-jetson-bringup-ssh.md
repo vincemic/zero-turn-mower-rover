@@ -97,7 +97,7 @@ Source: Research 002 Phase 1. Requires: AGX Orin dev kit, USB-C cable, Windows l
 |------|------|---------------------|
 | P1.1 | Download + install NVIDIA SDK Manager on Windows; install APX Driver if prompted | SDK Manager launches and logs in with NVIDIA developer account |
 | P1.2 | Enter Force Recovery Mode: hold Force Recovery → press/release Power → release Force Recovery; connect USB-C (port next to 40-pin header) to laptop | SDK Manager detects "Jetson AGX Orin Developer Kit" |
-| P1.3 | SDK Manager STEP 01: select Jetson AGX Orin, JetPack 6.2.1 | Correct target + version selected |
+| P1.3 | SDK Manager STEP 01: select Jetson AGX Orin, JetPack 6.2.2 | Correct target + version selected |
 | P1.4 | SDK Manager STEP 02: review components, accept licenses | No errors |
 | P1.5 | SDK Manager STEP 03: select eMMC storage target; choose Pre-Config with username=`mower`, hostname=`jetson-mower`, operator's locale/timezone | Flash begins |
 | P1.6 | Wait for flash to complete (15–45 min) | SDK Manager reports flash success |
@@ -310,9 +310,9 @@ class BringupContext:
 | `check-ssh` | `client.run(["true"])` returns ok | Print error directing to `mower jetson setup`; `typer.Exit(3)` | No |
 | `harden` | `client.run(["test", "-f", "/etc/ssh/sshd_config.d/90-mower-hardening.conf"])` ok AND `client.run(["systemctl", "get-default"])` stdout = `multi-user.target` | Push `scripts/jetson-harden.sh` via `client.push()`, run `sudo bash ~/jetson-harden.sh`, remove temp file | Yes |
 | `install-uv` | `client.run(["bash", "-c", ". ~/.local/bin/env 2>/dev/null; uv --version"])` ok | Run `curl -LsSf https://astral.sh/uv/install.sh \| sh`, then `. ~/.local/bin/env && uv python install 3.11` | No |
-| `install-cli` | `client.run(["bash", "-c", ". ~/.local/bin/env 2>/dev/null; mower-jetson --version"])` ok | Run `uv build --wheel` locally, find `.whl` in `dist/`, push via `client.push()`, run `uv tool install --python 3.11 --force ~/mower_rover-*.whl`, clean up | No |
+| `install-cli` | `client.run(["bash", "-c", ". ~/.local/bin/env 2>/dev/null; mower-jetson --version"])` ok | Run `uv build --wheel` locally, find `.whl` in `dist/`, push via `client.push()`, run `uv tool install --python 3.11 --force --with sdnotify ~/mower_rover-*.whl`, clean up | No |
 | `verify` | Never skips (read-only) | Run `mower-jetson probe --json`, parse JSON, print results table, exit non-zero if critical failures | No |
-| `service` | `client.run(["systemctl", "--user", "is-active", "mower-health.service"])` ok | Run `mower-jetson service install --yes`, then `mower-jetson service start --yes` | Yes |
+| `service` | `client.run(["systemctl", "--user", "is-active", "mower-health.service"])` ok | Run `mower-jetson service install --yes`, then `mower-jetson service start` (no `--yes` — `start` has no confirmation flag) | Yes |
 
 **Remote command execution pattern:**
 All remote commands use `client.run()`. For commands that need the uv-managed PATH:

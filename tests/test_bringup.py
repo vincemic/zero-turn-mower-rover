@@ -125,7 +125,7 @@ class TestBringupCLISmoke:
 
 class TestCheckSshOk:
     def test_returns_true_on_success(self, mock_client: MagicMock) -> None:
-        mock_client.run.return_value = _ssh_ok()
+        mock_client.run.return_value = _ssh_ok(stdout="ok\n")
         assert _check_ssh_ok(mock_client) is True
 
     def test_returns_false_on_failure(self, mock_client: MagicMock) -> None:

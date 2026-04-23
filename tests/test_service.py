@@ -62,14 +62,25 @@ class TestGenerateUnitFile:
         assert "StartLimitIntervalSec=300" in content
         assert "StartLimitBurst=5" in content
 
-    def test_contains_user(self) -> None:
+    def test_system_level_contains_user(self) -> None:
         content = generate_unit_file(
             mower_jetson_path="/usr/bin/mower-jetson",
             user="testuser",
             home_dir="/home/testuser",
             health_interval_s=60,
+            user_level=False,
         )
         assert "User=testuser" in content
+
+    def test_user_level_omits_user(self) -> None:
+        content = generate_unit_file(
+            mower_jetson_path="/usr/bin/mower-jetson",
+            user="testuser",
+            home_dir="/home/testuser",
+            health_interval_s=60,
+            user_level=True,
+        )
+        assert "User=" not in content
 
     def test_contains_exec_start(self) -> None:
         content = generate_unit_file(
@@ -153,7 +164,7 @@ class TestInstallService:
         assert unit_path.exists()
         content = unit_path.read_text(encoding="utf-8")
         assert "WatchdogSec=30" in content
-        assert "User=testuser" in content
+        assert "User=" not in content  # user-level units must not set User=
 
         mock_run.assert_called_once()
         args = mock_run.call_args[0][0]

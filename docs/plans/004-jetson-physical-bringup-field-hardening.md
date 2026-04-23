@@ -117,7 +117,7 @@ The plan consumes research 002 (all 5 phases) as the knowledge source and plan 0
 | PB-9 | Hardening script creates logrotate config for mower-rover logs | Research 002 Phase 5 §6 |
 | PB-10 | Hardening script writes journald limits (`SystemMaxUse=500M`, `MaxRetentionSec=7day`) | Research 002 Phase 5 §6 |
 | PB-11 | Hardening script sets `OPENBLAS_CORETYPE=ARMV8` in `/etc/environment` | Research 002 Phase 4 §3 |
-| PB-12 | Hardening script sets nvpmodel to mode 2 (30W) | Research 002 Phase 5 §1 |
+| PB-12 | Hardening script sets nvpmodel to mode 3 (50W) via `nvpmodel --force -m 3` (L4T 36.5 requires `--force` which triggers auto-reboot) | Research 002 Phase 5 §1 (overridden from mode 2 to mode 3 for OAK-D + VSLAM headroom) |
 | PB-13 | Hardening script enables hardware watchdog (`RuntimeWatchdogSec=30`) | Research 002 Phase 5 §5 |
 | PB-14 | Hardening script pins L4T kernel/bootloader packages via `apt-mark hold` | Research 002 Phase 1 §7 |
 | ~~PB-15~~ | ~~Auto-power-on jumper installed on J42 pins 5-6, verified by power-cycle test~~ | ~~Deferred — Research 002 lists configuration method as unresolved gap; requires follow-up research~~ |
@@ -185,8 +185,9 @@ set -euo pipefail
 # --- 5. OpenBLAS ARM fix ---
 # Append OPENBLAS_CORETYPE=ARMV8 to /etc/environment (if not already present)
 
-# --- 6. nvpmodel 30W ---
-# nvpmodel -m 2
+# --- 6. nvpmodel 50W ---
+# pkill -f nvpmodel_indicator (kill GUI daemon that blocks mode switch)
+# nvpmodel --force -m 3 (L4T 36.5 requires --force; triggers auto-reboot)
 
 # --- 7. Hardware watchdog ---
 # Write RuntimeWatchdogSec=30 to /etc/systemd/system.conf.d/watchdog.conf
@@ -323,12 +324,12 @@ codebase_patterns:
 | 3.3 | Add section 3: filesystem tuning — `sed` to add `noatime,commit=60` to root mount in `/etc/fstab`. **⚠️ R-4 mitigation:** use a conservative sed pattern that matches only the root (`/`) ext4 mount line and appends options; back up fstab before modifying (`cp /etc/fstab /etc/fstab.bak`); print before/after diff for operator review | `scripts/jetson-harden.sh` | Pattern guard: only modifies if `noatime` not already in root mount line; backup created; diff printed |
 | 3.4 | Add section 4: log rotation — write `/etc/logrotate.d/mower-jetson` and `/etc/systemd/journald.conf.d/mower.conf` | `scripts/jetson-harden.sh` | Creates parent dirs if needed; writes only if file differs or doesn't exist |
 | 3.5 | Add section 5: OPENBLAS fix — append `OPENBLAS_CORETYPE=ARMV8` to `/etc/environment` | `scripts/jetson-harden.sh` | `grep -q` guard: only appends if not already present |
-| 3.6 | Add section 6: nvpmodel — `nvpmodel -m 2` | `scripts/jetson-harden.sh` | Checks `nvpmodel -q` first; skips if already mode 2 |
+| 3.6 | Add section 6: nvpmodel — `pkill -f nvpmodel_indicator` then `nvpmodel --force -m 3` | `scripts/jetson-harden.sh` | Checks `nvpmodel -q` first; skips if already mode 3; `--force` triggers auto-reboot on L4T 36.5 |
 | 3.7 | Add section 7: hardware watchdog — write `/etc/systemd/system.conf.d/watchdog.conf` with `RuntimeWatchdogSec=30` (deliberate improvement over research 002 which modifies stock `system.conf` directly; drop-in survives apt upgrades) | `scripts/jetson-harden.sh` | Drop-in file; creates parent dir if needed |
 | 3.8 | Add section 8: apt-mark hold — `apt-mark hold nvidia-l4t-kernel nvidia-l4t-kernel-dtbs nvidia-l4t-kernel-headers nvidia-l4t-bootloader nvidia-l4t-initrd nvidia-l4t-xusb-firmware` | `scripts/jetson-harden.sh` | Each package individually held; `apt-mark showhold` confirms |
 | 3.9 | Add summary section: print status of each step (✓ applied / ● already configured) | `scripts/jetson-harden.sh` | Clear terminal output showing what changed |
 | 3.10 | Deploy script to Jetson: `scp scripts/jetson-harden.sh mower@192.168.4.38:~/` and run `sudo bash ~/jetson-harden.sh` | — | Script completes with all ✓/● statuses; no errors |
-| 3.11 | Reboot Jetson (`sudo reboot`) and verify: boots to text login (no GUI), `systemctl get-default` = `multi-user.target`, `nvpmodel -q` = mode 2, `cat /etc/fstab` shows `noatime`, `apt-mark showhold` lists L4T packages | — | All post-reboot checks pass |
+| 3.11 | Reboot Jetson (`sudo reboot`) and verify: boots to text login (no GUI), `systemctl get-default` = `multi-user.target`, `nvpmodel -q` = mode 3, `cat /etc/fstab` shows `noatime`, `apt-mark showhold` lists L4T packages | — | All post-reboot checks pass |
 
 ### Phase 4: Python Toolchain & CLI Install
 
@@ -349,7 +350,7 @@ codebase_patterns:
 | 4.6 | Run `mower-jetson info` | Reports JetPack release, hostname, kernel, CUDA version |
 | 4.7 | Run `mower-jetson probe` | All critical checks pass (jetpack_version, cuda, python, disk_space); warning checks report expected state |
 | 4.8 | Run `mower-jetson thermal` | Shows thermal zone temperatures without error |
-| 4.9 | Run `mower-jetson power` | Shows nvpmodel mode 2 (30W), CPU/GPU info |
+| 4.9 | Run `mower-jetson power` | Shows nvpmodel mode 3 (50W), CPU/GPU info |
 
 ### Phase 5: Final Verification
 
