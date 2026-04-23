@@ -553,6 +553,36 @@ This plan has been reviewed and is **Ready for Implementation**.
 | Created Date | 2026-04-23 |
 | Reviewed By | pch-plan-reviewer |
 | Review Date | 2026-04-23 |
-| Status | ✅ Ready for Implementation |
-| Next Agent | pch-coder |
+| Status | ✅ Complete |
+| Next Agent | — (implementation complete) |
 | Plan Location | /docs/plans/007-oakd-usb-slam-readiness.md |
+
+## Field Validation
+
+**Date:** 2026-04-23
+**Target:** Jetson AGX Orin Developer Kit at 192.168.4.38
+**Environment:** JetPack 6 (L4T 36.x), kernel 5.15.185-tegra, Python 3.10.12, depthai 3.5.0
+**Camera:** OAK-D Pro, MxID 14442C10A1E6D8D600
+
+### Validation Steps Performed
+
+1. **SCP'd `80-oakd-usb.rules`** to Jetson, installed to `/etc/udev/rules.d/`, ran `udevadm control --reload-rules && udevadm trigger`
+2. **Verified DepthAI permissions** — `depthai` connected to OAK-D Pro without root (previously failed with `Insufficient permissions to communicate with X_LINK_UNBOOTED device`)
+3. **Confirmed USB speed** — `device.getUsbSpeed()` returned `SUPER` (5 Gbps) after firmware boot; sysfs `speed` file shows `480` pre-boot (normal Movidius behavior)
+4. **Enumerated cameras** — 3 cameras detected: CAM_A (RGB), CAM_B (left mono), CAM_C (right mono)
+5. **Applied kernel params** via `sed -i` on `/boot/extlinux/extlinux.conf`: `usbcore.autosuspend=-1`, `usbcore.usbfs_memory_mb=1000`
+6. **Rebooted Jetson** — Verified params persisted: `/sys/module/usbcore/parameters/autosuspend` = `-1`, `/sys/module/usbcore/parameters/usbfs_memory_mb` = `1000`
+7. **Post-reboot camera test** — DepthAI connected successfully, USB `SUPER`, 3 cameras operational
+
+### Key Findings
+
+- **Pre-boot USB 2.0 is normal:** OAK-D appears at 480 Mbps in sysfs before DepthAI uploads firmware. This is Movidius MyriadX bootloader behavior, not a cable/port issue.
+- **Udev rules are mandatory:** Without `80-oakd-usb.rules` (`MODE="0666"` for vendor `03e7`), DepthAI cannot access the unbooted device.
+- **DepthAI v3 API changes:** `Device(pipeline)` constructor removed in v3.5.0 — use `Device()`. `getMxId()` deprecated — use `getDeviceId()`.
+- **USB topology:** Built-in hub splits into companion 2.0/3.0 hubs. OAK-D connects via Bus 01 (2.0) at `1-4.2` pre-boot, re-enumerates to Bus 02 (3.0) post-boot.
+- **MyriadX caps at 5 Gbps:** Device negotiates `SUPER` not `SUPER_PLUS` regardless of port capabilities. Sufficient for SLAM (249 Mbps = 5% utilization).
+
+### Artifacts Updated
+
+- `docs/research/006-oakd-pro-usb-slam-readiness.md` — Resolved 3 open questions, added Field Validation Log, corrected DepthAI v3 API code snippets
+- `.github/copilot-instructions.md` — Expanded Companion bullet with OAK-D USB setup requirements (udev, kernel params, depthai v3 API)

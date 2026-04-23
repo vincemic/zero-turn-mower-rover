@@ -895,11 +895,15 @@ dmesg | grep -i "xhci-tegra.*new SuperSpeed"
 
 ### DepthAI API Checks
 
+> **Field-validated 2026-04-23:** DepthAI v3.5.0 changed the `Device` constructor — it no longer
+> accepts a `Pipeline` argument. Use `dai.Device()` (no args) to connect and boot firmware.
+> `getMxId()` is deprecated in favor of `getDeviceId()`.
+
 ```python
 import depthai as dai
 
-pipeline = dai.Pipeline()
-with dai.Device(pipeline) as device:
+# v3 API: Device() takes no pipeline argument; pipeline is started separately
+with dai.Device() as device:
     # USB speed
     usb_speed = device.getUsbSpeed()
     assert usb_speed in (dai.UsbSpeed.SUPER, dai.UsbSpeed.SUPER_PLUS)
@@ -908,10 +912,12 @@ with dai.Device(pipeline) as device:
     temp = device.getChipTemperature()
     assert temp.average < 85.0
 
-    # Calibration
-    calib = device.readCalibration2()
-    eeprom = calib.getEepromData()
-    assert len(eeprom.cameraData) >= 2
+    # Device ID (v3: getMxId() deprecated, use getDeviceId())
+    device_id = device.getDeviceId()
+
+    # Connected cameras
+    cams = device.getConnectedCameraFeatures()
+    assert len(cams) >= 2  # stereo pair minimum
 ```
 
 ### FPS Counter / Frame-Drop Detection Script Design
@@ -1024,8 +1030,8 @@ def check_oakd(sysroot: Path) -> tuple[bool, str]:
 | `src/mower_rover/cli/jetson.py` | CLI integration point for `slam-preflight` |
 | `tests/test_probe.py` | Test pattern with fake sysfs trees |
 
-**Gaps:** Exact `dmesg` output on L4T 36.x needs field validation. `readCalibration2()` API name may differ in depthai v3. IMU drop detection via timestamp gaps not fully designed.  
-**Assumptions:** DepthAI v2-compatible API (method names from v2/3.5.0). 10% FPS tolerance acceptable for VIO/SLAM. SLAM validation runs standalone on Jetson (requires depthai bindings).
+**Gaps:** ~~Exact `dmesg` output on L4T 36.x needs field validation~~ (resolved 2026-04-23). ~~`readCalibration2()` API name may differ in depthai v3~~ (resolved 2026-04-23 — v3 changes `Device` constructor, deprecates `getMxId()`). IMU drop detection via timestamp gaps not fully designed.
+**Assumptions:** DepthAI v3 API (v3.5.0 confirmed on Jetson AGX Orin). 10% FPS tolerance acceptable for VIO/SLAM. SLAM validation runs standalone on Jetson (requires depthai bindings).
 
 ## Overview
 
@@ -1064,11 +1070,32 @@ The existing `oakd.py` probe check needs minimal enhancement (add `speed` file r
 
 ## Open Questions
 
-- Exact `dmesg` wording on L4T 36.x for XLink re-enumeration (needs field validation)
-- `readCalibration2()` vs `readCalibration()` method name in depthai v3 API (verify against installed version)
+- ~~Exact `dmesg` wording on L4T 36.x for XLink re-enumeration~~ **Resolved 2026-04-23:** Field-validated on L4T 36.x (kernel 5.15.185-tegra). Pre-boot: `usb 1-4.2: new high-speed USB device number 4 using tegra-xusb` (480 Mbps via USB 2.0 companion hub). After DepthAI boots firmware, device re-enumerates at SuperSpeed. `device.getUsbSpeed()` returns `SUPER`.
+- ~~`readCalibration2()` vs `readCalibration()` method name in depthai v3 API~~ **Resolved 2026-04-23:** In depthai v3.5.0, `readCalibration2()` still exists but `getConnectedCameraFeatures()` is the preferred way to enumerate cameras. `getMxId()` is deprecated — use `getDeviceId()`. `Device(pipeline)` constructor is removed in v3; use `Device()` with no args.
 - IMU packet drop detection (no `getSequenceNum()` on IMU packets — needs timestamp-gap approach)
-- Whether J33 Gen 2 Type-A actually negotiates at 10 Gbps with OAK-D Pro (device is 5 Gbps capable, so it may cap at 5000M regardless of port)
+- ~~Whether J33 Gen 2 Type-A actually negotiates at 10 Gbps with OAK-D Pro~~ **Resolved 2026-04-23:** Field-validated — OAK-D Pro negotiates `SUPER` (5 Gbps), not `SUPER_PLUS` (10 Gbps). The Movidius MyriadX chipset is USB 3.2 Gen 1 (5 Gbps max). The 10 Gbps port provides headroom but the device caps at 5 Gbps. Sufficient for SLAM (249 Mbps = 5% utilization).
 - Power delivery on Type-A vs Type-C for the OAK-D Pro's 7W peak with IR (Type-A spec is 4.5W at 5V/0.9A)
+
+## Field Validation Log
+
+**Date:** 2026-04-23
+**Jetson:** AGX Orin Developer Kit, JetPack 6 (L4T 36.x), kernel 5.15.185-tegra
+**OAK-D:** OAK-D Pro, MxID 14442C10A1E6D8D600, depthai 3.5.0
+
+| Check | Pre-fix | Post-fix | Notes |
+|-------|---------|----------|-------|
+| Device detected (`lsusb`) | `03e7:2485 Movidius MyriadX` | Same | Pre-boot VID/PID; DepthAI boots firmware |
+| DepthAI permissions | `Insufficient permissions` | 1 device found | Fixed by `80-oakd-usb.rules` (`MODE="0666"` for vendor `03e7`) |
+| USB speed (pre-boot sysfs) | 480 Mbps | 480 Mbps | Normal — Movidius boots in USB 2.0 mode |
+| USB speed (post-boot DepthAI) | N/A | `SUPER` (5 Gbps) | After firmware upload, re-enumerates at USB 3.x |
+| Connected cameras | N/A | CAM_A, CAM_B, CAM_C | RGB + stereo pair |
+| `usbcore.autosuspend` | 2 (default) | -1 | Applied via `extlinux.conf`, survived reboot |
+| `usbfs_memory_mb` | 16 (default) | 1000 | Applied via `extlinux.conf`, survived reboot |
+| Post-reboot camera test | N/A | `SUPER`, 3 cameras, operational | Full persistence confirmed |
+
+**Key finding:** The sysfs `speed` file always shows `480` for an unbooted OAK-D (pre-firmware). The probe check `oakd` reads sysfs before DepthAI boots the device, so it will see 480 Mbps. This is expected behavior — the `speed` sysfs check detects physical USB 2.0 fallback (wrong port/cable), while DepthAI's `getUsbSpeed()` confirms post-boot SuperSpeed. The probe check correctly handles this: if vendor `03e7` is found with `speed=480` and no `speed` file for a booted device, it reports the speed but doesn't block on the pre-boot 480 reading when speed file is present.
+
+**Physical topology:** OAK-D connected to J33 USB-A port. USB tree shows it on Bus 01 (480M root hub) via `4-Port USB 2.0 Hub` at `1-4.2`. The companion `4-Port USB 3.0 Hub` is on Bus 02 at `2-3`. XLink firmware boot causes re-enumeration from Bus 01 to Bus 02 SuperSpeed.
 
 ## References
 
