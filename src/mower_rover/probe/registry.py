@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from mower_rover.logging_setup.setup import get_logger

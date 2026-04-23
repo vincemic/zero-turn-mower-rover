@@ -61,7 +61,7 @@ def run_daemon(
             signal.signal(signal.SIGTERM, _handle_signal)
         signal.signal(signal.SIGINT, _handle_signal)
 
-    _notifier.notify("READY=1")  # type: ignore[union-attr]
+    _notifier.notify("READY=1")  # type: ignore[attr-defined]
     log.info("daemon_started", health_interval_s=health_interval_s)
 
     # Force immediate first health check and watchdog ping.
@@ -73,7 +73,7 @@ def run_daemon(
 
         # Watchdog heartbeat every 15 s (< WatchdogSec=30).
         if now - last_watchdog >= 15.0:
-            _notifier.notify("WATCHDOG=1")  # type: ignore[union-attr]
+            _notifier.notify("WATCHDOG=1")  # type: ignore[attr-defined]
             last_watchdog = now
 
         # Health snapshot every health_interval_s.

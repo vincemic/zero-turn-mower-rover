@@ -254,7 +254,10 @@ def test_probe_help(runner: CliRunner) -> None:
 
 def test_probe_json_with_monkeypatched_results(runner: CliRunner) -> None:
     canned = [
-        CheckResult(name="python_ver", status=Status.PASS, severity=Severity.CRITICAL, detail="3.11.5"),
+        CheckResult(
+            name="python_ver", status=Status.PASS,
+            severity=Severity.CRITICAL, detail="3.11.5",
+        ),
         CheckResult(name="disk", status=Status.FAIL, severity=Severity.WARNING, detail="disk low"),
     ]
     with patch("mower_rover.cli.jetson.run_checks", return_value=canned):

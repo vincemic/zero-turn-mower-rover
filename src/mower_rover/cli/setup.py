@@ -16,9 +16,9 @@ import json as _json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 import typer
 from rich.console import Console
@@ -226,7 +226,11 @@ def _deploy_key(ctx: SetupContext) -> None:
 
     if sys.platform == "win32":
         # Windows: pipe the public key via `type` into ssh
-        shell_cmd = f'type "{pub}" | "{ssh_bin}" -o StrictHostKeyChecking=accept-new {target} "{remote_cmd}"'
+        shell_cmd = (
+            f'type "{pub}" | "{ssh_bin}"'
+            f' -o StrictHostKeyChecking=accept-new {target}'
+            f' "{remote_cmd}"'
+        )
         try:
             result = subprocess.run(
                 shell_cmd, shell=True, timeout=60, check=False,
@@ -234,7 +238,7 @@ def _deploy_key(ctx: SetupContext) -> None:
             )
         except subprocess.TimeoutExpired:
             _console.print("[red]Key deployment timed out.[/red]")
-            raise typer.Exit(code=3)
+            raise typer.Exit(code=3) from None
     else:
         # Linux/macOS: use ssh-copy-id for a cleaner UX
         ssh_copy_id = _find_binary("ssh-copy-id")
@@ -244,10 +248,14 @@ def _deploy_key(ctx: SetupContext) -> None:
                 result = subprocess.run(argv, timeout=60, check=False, capture_output=False)
             except subprocess.TimeoutExpired:
                 _console.print("[red]Key deployment timed out.[/red]")
-                raise typer.Exit(code=3)
+                raise typer.Exit(code=3) from None
         else:
             # Fallback: pipe via cat
-            shell_cmd = f'cat "{pub}" | "{ssh_bin}" -o StrictHostKeyChecking=accept-new {target} \'{remote_cmd}\''
+            shell_cmd = (
+                f'cat "{pub}" | "{ssh_bin}"'
+                f" -o StrictHostKeyChecking=accept-new {target}"
+                f" '{remote_cmd}'"
+            )
             try:
                 result = subprocess.run(
                     shell_cmd, shell=True, timeout=60, check=False,
@@ -255,7 +263,7 @@ def _deploy_key(ctx: SetupContext) -> None:
                 )
             except subprocess.TimeoutExpired:
                 _console.print("[red]Key deployment timed out.[/red]")
-                raise typer.Exit(code=3)
+                raise typer.Exit(code=3) from None
 
     if result.returncode != 0:
         _console.print("[red]Key deployment failed.[/red] Check the password and try again.")
@@ -454,7 +462,7 @@ def setup_command(
 
         log.info("step_executing", step=step.name)
         step.execute(sctx)
-        _console.print(f"  [green]\u2714 Done.[/green]")
+        _console.print("  [green]\u2714 Done.[/green]")
 
     _console.print("\n[bold green]Setup complete![/bold green]")
 

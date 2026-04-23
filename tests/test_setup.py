@@ -16,7 +16,6 @@ from mower_rover.cli.laptop import app as laptop_app
 from mower_rover.cli.setup import (
     SETUP_STEPS,
     SetupContext,
-    SetupStep,
     _config_exists,
     _endpoint_configured,
     _key_auth_works,
@@ -72,7 +71,9 @@ class TestEndpointConfigured:
         assert ctx.host == "envhost"
         assert ctx.user == "envuser"
 
-    def test_returns_true_from_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_returns_true_from_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         monkeypatch.delenv("MOWER_JETSON_HOST", raising=False)
         monkeypatch.delenv("MOWER_JETSON_USER", raising=False)
         cfg = tmp_path / "laptop.yaml"
@@ -182,7 +183,6 @@ class TestRemoteProbeOk:
             assert _remote_probe_ok(sctx) is False
 
     def test_returns_false_on_ssh_error(self, sctx: SetupContext) -> None:
-        from mower_rover.transport.ssh import SshError
 
         with (
             patch("mower_rover.transport.ssh.shutil.which", return_value="ssh"),

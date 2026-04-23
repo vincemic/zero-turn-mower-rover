@@ -12,10 +12,9 @@ from unittest.mock import patch
 
 import pytest
 
-from mower_rover.health.disk import DiskUsage, read_disk_usage
+from mower_rover.health.disk import read_disk_usage
 from mower_rover.health.power import PowerState, read_power_state
-from mower_rover.health.thermal import ThermalSnapshot, ThermalZone, read_thermal_zones
-
+from mower_rover.health.thermal import ThermalSnapshot, read_thermal_zones
 
 # ---------------------------------------------------------------------------
 # Fixtures — fake sysfs trees

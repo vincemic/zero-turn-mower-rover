@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Shared fake sysfs fixture — Jetson-like filesystem tree
 # ---------------------------------------------------------------------------

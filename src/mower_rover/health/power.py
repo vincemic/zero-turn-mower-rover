@@ -8,6 +8,7 @@ live system (or are mocked in tests).
 
 from __future__ import annotations
 
+import contextlib
 import re
 import subprocess
 from dataclasses import dataclass
@@ -84,10 +85,8 @@ def _read_online_cpus(sysroot: Path) -> int | None:
         part = part.strip()
         if "-" in part:
             lo, hi = part.split("-", 1)
-            try:
+            with contextlib.suppress(ValueError):
                 count += int(hi) - int(lo) + 1
-            except ValueError:
-                pass
         else:
             try:
                 int(part)

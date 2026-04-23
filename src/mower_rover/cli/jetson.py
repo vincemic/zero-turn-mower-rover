@@ -41,7 +41,7 @@ from mower_rover.health.disk import read_disk_usage
 from mower_rover.health.power import PowerState, read_power_state
 from mower_rover.health.thermal import ThermalSnapshot, read_thermal_zones
 from mower_rover.logging_setup.setup import configure_logging, get_logger
-from mower_rover.probe.registry import CheckResult, Severity, Status, derive_exit_code, run_checks
+from mower_rover.probe.registry import Status, derive_exit_code, run_checks
 from mower_rover.safety.confirm import ConfirmationAborted, SafetyContext
 from mower_rover.service.daemon import run_daemon
 from mower_rover.service.unit import UNIT_NAME, install_service, uninstall_service
@@ -54,7 +54,11 @@ app = typer.Typer(
 config_app = typer.Typer(name="config", help="Inspect Jetson-side config.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 
-service_app = typer.Typer(name="service", help="Manage the mower-health systemd service.", no_args_is_help=True)
+service_app = typer.Typer(
+    name="service",
+    help="Manage the mower-health systemd service.",
+    no_args_is_help=True,
+)
 app.add_typer(service_app, name="service")
 
 
@@ -360,8 +364,9 @@ def thermal_command(
 # --- power -------------------------------------------------------------------
 
 def _render_power_panel(state: PowerState) -> Panel:
+    mode_id_str = state.mode_id if state.mode_id is not None else "-"
     lines = [
-        f"Mode       : {state.mode_name or '-'} (ID: {state.mode_id if state.mode_id is not None else '-'})",
+        f"Mode       : {state.mode_name or '-'} (ID: {mode_id_str})",
         f"Online CPUs: {state.online_cpus if state.online_cpus is not None else '-'}",
         f"GPU Freq   : {f'{state.gpu_freq_mhz} MHz' if state.gpu_freq_mhz is not None else '-'}",
         f"Fan Profile: {state.fan_profile or '-'}",

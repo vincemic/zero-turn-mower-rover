@@ -12,25 +12,21 @@ from unittest.mock import patch
 
 import pytest
 
+# ---------------------------------------------------------------------------
+# Helpers — ensure check modules are imported so the registry is populated.
+# ---------------------------------------------------------------------------
+import mower_rover.probe.checks  # noqa: E402, F401
 from mower_rover.probe.registry import (
+    _REGISTRY,
     CheckResult,
     CheckSpec,
     Severity,
     Status,
-    _REGISTRY,
     _resolve_order,
     derive_exit_code,
     register,
     run_checks,
 )
-
-
-# ---------------------------------------------------------------------------
-# Helpers — ensure check modules are imported so the registry is populated.
-# ---------------------------------------------------------------------------
-
-import mower_rover.probe.checks  # noqa: E402, F401
-
 
 # ---------------------------------------------------------------------------
 # Registry tests
@@ -64,16 +60,28 @@ class TestRegistry:
 
     def test_dependency_cycle_raises(self) -> None:
         specs = {
-            "a": CheckSpec(name="a", severity=Severity.INFO, depends_on=("b",), fn=lambda s: (True, "")),
-            "b": CheckSpec(name="b", severity=Severity.INFO, depends_on=("a",), fn=lambda s: (True, "")),
+            "a": CheckSpec(
+                name="a", severity=Severity.INFO,
+                depends_on=("b",), fn=lambda s: (True, ""),
+            ),
+            "b": CheckSpec(
+                name="b", severity=Severity.INFO,
+                depends_on=("a",), fn=lambda s: (True, ""),
+            ),
         }
         with pytest.raises(ValueError, match="cycle"):
             _resolve_order(specs)
 
     def test_resolve_order_respects_deps(self) -> None:
         specs = {
-            "child": CheckSpec(name="child", severity=Severity.INFO, depends_on=("parent",), fn=lambda s: (True, "")),
-            "parent": CheckSpec(name="parent", severity=Severity.INFO, depends_on=(), fn=lambda s: (True, "")),
+            "child": CheckSpec(
+                name="child", severity=Severity.INFO,
+                depends_on=("parent",), fn=lambda s: (True, ""),
+            ),
+            "parent": CheckSpec(
+                name="parent", severity=Severity.INFO,
+                depends_on=(), fn=lambda s: (True, ""),
+            ),
         }
         order = _resolve_order(specs)
         assert order.index("parent") < order.index("child")

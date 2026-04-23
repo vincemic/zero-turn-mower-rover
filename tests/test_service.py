@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -26,7 +26,6 @@ from mower_rover.service.unit import (
     uninstall_service,
     unit_dir,
 )
-
 
 # ---------------------------------------------------------------------------
 # generate_unit_file
