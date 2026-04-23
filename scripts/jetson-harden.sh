@@ -132,14 +132,14 @@ harden_openblas() {
 }
 
 # ---------------------------------------------------------------------------
-# 6. nvpmodel — set to mode 2 (30W)
+# 6. nvpmodel — set to mode 3 (50W) for OAK-D camera + SLAM workloads
 # ---------------------------------------------------------------------------
 harden_nvpmodel() {
     # nvpmodel -q output varies; check the mode ID line
-    if nvpmodel -q 2>/dev/null | grep -q 'POWER_MODEL ID=2'; then
+    if nvpmodel -q 2>/dev/null | grep -q 'POWER_MODEL ID=3'; then
         STATUS[nvpmodel]="already"
     else
-        nvpmodel -m 2
+        nvpmodel -m 3
         STATUS[nvpmodel]="applied"
     fi
 }
@@ -199,13 +199,15 @@ harden_apt_hold() {
 # ---------------------------------------------------------------------------
 harden_ssh() {
     local conf="/etc/ssh/sshd_config.d/90-mower-hardening.conf"
+    # Allow the invoking user (via SUDO_USER) and root
+    local ssh_user="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
     local desired
-    desired=$(cat <<'SSHEOF'
+    desired=$(cat <<SSHEOF
 # Mower rover SSH hardening — managed by jetson-harden.sh
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
-AllowUsers mower
+AllowUsers ${ssh_user}
 X11Forwarding no
 AllowTcpForwarding no
 ClientAliveInterval 60
@@ -241,7 +243,7 @@ print_summary() {
         "logrotate:Logrotate config"
         "journald:Journald limits"
         "openblas:OPENBLAS_CORETYPE=ARMV8"
-        "nvpmodel:nvpmodel mode 2 (30W)"
+        "nvpmodel:nvpmodel mode 3 (50W)"
         "watchdog:Hardware watchdog (30s)"
         "apt_hold:apt-mark hold L4T packages"
         "ssh_hardening:SSH hardening (sshd drop-in)"
@@ -290,7 +292,7 @@ main() {
     echo "[5/9] OpenBLAS ARM fix..."
     harden_openblas
 
-    echo "[6/9] nvpmodel (30W)..."
+    echo "[6/9] nvpmodel (50W)..."
     harden_nvpmodel
 
     echo "[7/9] Hardware watchdog..."
