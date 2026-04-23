@@ -100,3 +100,58 @@ def test_pull_failure_raises(endpoint: JetsonEndpoint, tmp_path: Path) -> None:
         pytest.raises(SshError, match="No such file"),
     ):
         client.pull("/nope", tmp_path / "out.bin")
+
+
+# -- push / build_scp_push_argv -------------------------------------------
+
+
+def test_build_scp_push_argv(endpoint: JetsonEndpoint) -> None:
+    client = JetsonClient(
+        endpoint, ssh_binary="C:/fake/ssh.exe", scp_binary="C:/fake/scp.exe"
+    )
+    argv = client.build_scp_push_argv(Path("C:/local/script.sh"), "/tmp/script.sh")
+    assert argv[0] == "C:/fake/scp.exe"
+    assert "-P" in argv and "2222" in argv
+    assert str(Path("C:/local/script.sh")) in argv
+    assert "mower@rover.lan:/tmp/script.sh" in argv
+    # local comes before remote in push (opposite of pull)
+    local_idx = argv.index(str(Path("C:/local/script.sh")))
+    remote_idx = argv.index("mower@rover.lan:/tmp/script.sh")
+    assert local_idx < remote_idx
+
+
+def test_build_scp_push_argv_missing_scp(endpoint: JetsonEndpoint) -> None:
+    with patch("mower_rover.transport.ssh.shutil.which", return_value=None):
+        client = JetsonClient(endpoint)
+    with pytest.raises(SshError, match="scp"):
+        client.build_scp_push_argv(Path("/x"), "/y")
+
+
+def test_push_success(endpoint: JetsonEndpoint, tmp_path: Path) -> None:
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    fake = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("mower_rover.transport.ssh.subprocess.run", return_value=fake):
+        result = client.push(tmp_path / "file.sh", "/opt/mower/file.sh")
+    assert result.ok
+
+
+def test_push_failure_raises(endpoint: JetsonEndpoint, tmp_path: Path) -> None:
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    fake = MagicMock(returncode=1, stdout="", stderr="Permission denied")
+    with (
+        patch("mower_rover.transport.ssh.subprocess.run", return_value=fake),
+        pytest.raises(SshError, match="Permission denied"),
+    ):
+        client.push(tmp_path / "file.sh", "/opt/mower/file.sh")
+
+
+def test_push_timeout_raises(endpoint: JetsonEndpoint, tmp_path: Path) -> None:
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    with (
+        patch(
+            "mower_rover.transport.ssh.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="scp", timeout=1.0),
+        ),
+        pytest.raises(SshError, match="timed out"),
+    ):
+        client.push(tmp_path / "file.sh", "/opt/mower/file.sh", timeout=1.0)

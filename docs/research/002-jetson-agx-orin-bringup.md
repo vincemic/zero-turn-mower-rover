@@ -334,10 +334,10 @@ The Jetson AGX Orin dev kit (P3737-0000 carrier board) exposes **one 10GbE RJ-45
 
 | Approach | Pros | Cons |
 |----------|------|------|
-| **Static IP** (`10.0.0.42` / `10.0.0.1`) | Zero external dependency; deterministic; aligns with existing codebase examples; instant on cable plug-in | Requires manual config on both sides |
+| **Static IP** (`192.168.4.38` / `192.168.4.1`) | Zero external dependency; deterministic; aligns with existing codebase examples; instant on cable plug-in | Requires manual config on both sides |
 | **mDNS** (`jetson-mower.local`) | Human-readable hostname; adapts to DHCP | Multicast dependency; Windows mDNS can be flaky on direct links; not strongest field-offline |
 
-Use `10.0.0.42` for the Jetson and `10.0.0.1` for the laptop as canonical bench addressing. Avahi broadcasts `jetson-mower.local` automatically when avahi-daemon is running.
+Use `192.168.4.38` for the Jetson and `192.168.4.1` for the laptop as canonical bench addressing. Avahi broadcasts `jetson-mower.local` automatically when avahi-daemon is running.
 
 ### 3. Jetson-Side Netplan Configuration
 
@@ -349,7 +349,7 @@ network:
   ethernets:
     eth0:
       addresses:
-        - 10.0.0.42/24
+        - 192.168.4.38/24
       # No gateway — direct point-to-point link
       # No DNS — field-offline
       nameservers:
@@ -363,7 +363,7 @@ sudo netplan apply
 **Alternative (nmcli):**
 ```bash
 sudo nmcli con add type ethernet con-name mower-bench ifname eth0 \
-  ipv4.addresses 10.0.0.42/24 ipv4.method manual
+  ipv4.addresses 192.168.4.38/24 ipv4.method manual
 sudo nmcli con up mower-bench
 ```
 
@@ -374,7 +374,7 @@ sudo nmcli con up mower-bench
 Get-NetAdapter | Where-Object { $_.MediaType -eq '802.3' }
 
 # Set static IP (replace "Ethernet" with actual adapter name)
-New-NetIPAddress -InterfaceAlias "Ethernet" -IPAddress 10.0.0.1 -PrefixLength 24
+New-NetIPAddress -InterfaceAlias "Ethernet" -IPAddress 192.168.4.1 -PrefixLength 24
 Set-NetIPInterface -InterfaceAlias "Ethernet" -Dhcp Disabled
 ```
 
@@ -382,8 +382,8 @@ Set-NetIPInterface -InterfaceAlias "Ethernet" -Dhcp Disabled
 
 - Hostname `jetson-mower` set during Pre-Config (Phase 1)
 - Avahi advertises `jetson-mower.local` automatically
-- `laptop.yaml` should use the static IP (`10.0.0.42`) for reliability, not hostname
-- Optional: add `10.0.0.42 jetson-mower` to Windows `hosts` file
+- `laptop.yaml` should use the static IP (`192.168.4.38`) for reliability, not hostname
+- Optional: add `192.168.4.38 jetson-mower` to Windows `hosts` file
 
 ### 6. SSH Key Generation and Deployment
 
@@ -394,12 +394,12 @@ ssh-keygen -t ed25519 -C "mower-rover-laptop" -f "$env:USERPROFILE\.ssh\mower_id
 
 **Deploy to Jetson (one-time, before disabling password auth):**
 ```powershell
-type "$env:USERPROFILE\.ssh\mower_id_ed25519.pub" | ssh mower@10.0.0.42 "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+type "$env:USERPROFILE\.ssh\mower_id_ed25519.pub" | ssh mower@192.168.4.38 "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
 ```
 
 **Verify key auth:**
 ```powershell
-ssh -i "$env:USERPROFILE\.ssh\mower_id_ed25519" -o BatchMode=yes mower@10.0.0.42 "echo ok"
+ssh -i "$env:USERPROFILE\.ssh\mower_id_ed25519" -o BatchMode=yes mower@192.168.4.38 "echo ok"
 ```
 
 ### 7. SSH Hardening on the Jetson
@@ -434,7 +434,7 @@ The project's `JetsonClient._common_opts()` already sets:
 **No code changes needed.** The bench config maps directly to `laptop.yaml`:
 ```yaml
 jetson:
-  host: 10.0.0.42
+  host: 192.168.4.38
   user: mower
   port: 22
   key_path: ~/.ssh/mower_id_ed25519
@@ -457,17 +457,17 @@ jetson:
 
 ### 11. Field Networking
 
-- Same `10.0.0.42/24` ↔ `10.0.0.1/24` config works in bench and field with no changes
+- Same `192.168.4.38/24` ↔ `192.168.4.1/24` config works in bench and field with no changes
 - USB-C Ethernet gadget (`l4tbr0` at `192.168.55.1`) is not recommended as primary link (USB-C port needed for OAK-D Pro, lower bandwidth)
-- Host key regenerates on re-flash — operator must `ssh-keygen -R 10.0.0.42` after any re-flash
+- Host key regenerates on re-flash — operator must `ssh-keygen -R 192.168.4.38` after any re-flash
 
 ### 12. Complete Bench Bringup Networking Procedure
 
 1. Generate SSH key on Windows (`ssh-keygen -t ed25519`)
 2. Connect Ethernet cable (laptop ↔ Jetson RJ-45)
-3. Configure Windows static IP (`10.0.0.1/24`)
-4. Configure Jetson static IP via netplan (`10.0.0.42/24`)
-5. Verify connectivity (`ping 10.0.0.42`)
+3. Configure Windows static IP (`192.168.4.1/24`)
+4. Configure Jetson static IP via netplan (`192.168.4.38/24`)
+5. Verify connectivity (`ping 192.168.4.38`)
 6. Deploy SSH public key to Jetson
 7. Verify key auth (`ssh -o BatchMode=yes`)
 8. Deploy SSH hardening drop-in config
@@ -476,7 +476,7 @@ jetson:
 11. Verify `mower jetson info` works over the link
 
 **Key Discoveries:**
-- Static IP (`10.0.0.42`/`10.0.0.1`) is correct primary addressing — aligns with codebase
+- Static IP (`192.168.4.38`/`192.168.4.1`) is correct primary addressing — aligns with codebase
 - Existing SSH transport layer is perfectly aligned with key-only auth setup
 - Ed25519 keys recommended; Windows OpenSSH fully interoperable
 - SSH hardening via drop-in config (`sshd_config.d/`) survives apt upgrades
@@ -498,7 +498,7 @@ jetson:
 
 **Assumptions:**
 - AGX Orin dev kit has standard RJ-45 GbE port on P3737-0000 carrier board
-- `10.0.0.0/24` subnet not in use elsewhere on operator's network
+- `192.168.4.0/24` subnet not in use elsewhere on operator's network
 - Ed25519 supported by operator's Windows OpenSSH version (8.x+)
 
 ## Phase 3: Python toolchain & project install
@@ -1063,7 +1063,7 @@ This research documents a complete, repeatable bringup procedure for the NVIDIA 
 
 2. **Python version mismatch is the most critical bringup issue.** JetPack ships Python 3.10; the project requires ≥3.11. Solution: `uv python install 3.11` provides a managed interpreter independent of the system Python. `uv tool install` replaces `pipx` for CLI installation.
 
-3. **Static IP (10.0.0.42/10.0.0.1) with key-only SSH** is the correct networking baseline — field-offline, deterministic, and already aligned with the existing transport layer code. No code changes needed.
+3. **Static IP (192.168.4.38/192.168.4.1) with key-only SSH** is the correct networking baseline — field-offline, deterministic, and already aligned with the existing transport layer code. No code changes needed.
 
 4. **OAK-D Pro runs entirely on its Myriad X VPU** — no Jetson CUDA dependency for DepthAI. Install via `pip install depthai` in a separate venv. Keep DepthAI out of `pyproject.toml` until the VSLAM phase.
 
@@ -1076,7 +1076,7 @@ This research documents a complete, repeatable bringup procedure for the NVIDIA 
 ### Complete Bringup Sequence
 
 1. Flash JetPack 6.2.1 via SDK Manager on Windows (Pre-Config: user `mower`, hostname `jetson-mower`, NVMe storage)
-2. Connect direct Ethernet; configure static IPs (Jetson 10.0.0.42, laptop 10.0.0.1)
+2. Connect direct Ethernet; configure static IPs (Jetson 192.168.4.38, laptop 192.168.4.1)
 3. Deploy Ed25519 SSH key; harden SSH via drop-in config (`sshd_config.d/90-mower-hardening.conf`)
 4. Install uv; install Python 3.11 via `uv python install 3.11`
 5. Clone project; install via `uv tool install --python 3.11 ~/mower-rover/`

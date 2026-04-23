@@ -32,7 +32,7 @@ app = typer.Typer(
 # --- endpoint resolution ----------------------------------------------------
 
 
-def _resolve_endpoint(
+def resolve_endpoint(
     host: str | None,
     user: str | None,
     port: int | None,
@@ -91,7 +91,7 @@ def _resolve_endpoint(
     return endpoint
 
 
-def _client_for(
+def client_for(
     ctx: typer.Context, endpoint: JetsonEndpoint, strict_host_keys: str
 ) -> JetsonClient:
     cid = ctx.obj.get("correlation_id") if ctx.obj else None
@@ -138,9 +138,9 @@ def run_command(
         typer.echo("ERROR: pass the remote command after `--`, e.g. `-- uname -a`.", err=True)
         raise typer.Exit(code=2)
 
-    endpoint = _resolve_endpoint(host, user, port, key, config)
+    endpoint = resolve_endpoint(host, user, port, key, config)
     dry_run = bool(ctx.obj and ctx.obj.get("dry_run"))
-    client = _client_for(ctx, endpoint, strict_host_keys)
+    client = client_for(ctx, endpoint, strict_host_keys)
 
     try:
         argv = client.build_ssh_argv(remote_argv)
@@ -194,9 +194,9 @@ def pull_command(
 ) -> None:
     """Copy a file from the Jetson to the laptop via scp."""
     log = get_logger("cli.jetson").bind(op="pull", remote=remote, local=str(local))
-    endpoint = _resolve_endpoint(host, user, port, key, config)
+    endpoint = resolve_endpoint(host, user, port, key, config)
     dry_run = bool(ctx.obj and ctx.obj.get("dry_run"))
-    client = _client_for(ctx, endpoint, strict_host_keys)
+    client = client_for(ctx, endpoint, strict_host_keys)
 
     try:
         argv = client.build_scp_pull_argv(remote, local)
@@ -244,9 +244,9 @@ def info_command(
 ) -> None:
     """Run `mower-jetson info --json` over SSH and pretty-print the result."""
     log = get_logger("cli.jetson").bind(op="info")
-    endpoint = _resolve_endpoint(host, user, port, key, config)
+    endpoint = resolve_endpoint(host, user, port, key, config)
     dry_run = bool(ctx.obj and ctx.obj.get("dry_run"))
-    client = _client_for(ctx, endpoint, strict_host_keys)
+    client = client_for(ctx, endpoint, strict_host_keys)
 
     remote_argv = ["mower-jetson", "info", "--json"]
     if dry_run:
@@ -284,10 +284,12 @@ def info_command(
 
 # --- setup ------------------------------------------------------------------
 
+from mower_rover.cli.bringup import bringup_command  # noqa: E402
 from mower_rover.cli.setup import health_command, setup_command  # noqa: E402
 
 app.command("setup")(setup_command)
 app.command("health")(health_command)
+app.command("bringup")(bringup_command)
 
 
-__all__ = ["app"]
+__all__ = ["app", "resolve_endpoint", "client_for"]

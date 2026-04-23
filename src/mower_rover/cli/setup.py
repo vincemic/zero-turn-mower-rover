@@ -488,12 +488,12 @@ def health_command(
     """Run `mower-jetson probe --json` over SSH and render results locally."""
     from rich.table import Table
 
-    from mower_rover.cli.jetson_remote import _client_for, _resolve_endpoint
+    from mower_rover.cli.jetson_remote import client_for, resolve_endpoint
 
     log = get_logger("cli.jetson").bind(op="health")
-    endpoint = _resolve_endpoint(host, user, port, key, config)
+    endpoint = resolve_endpoint(host, user, port, key, config)
     dry_run = bool(ctx.obj and ctx.obj.get("dry_run"))
-    client = _client_for(ctx, endpoint, strict_host_keys)
+    client = client_for(ctx, endpoint, strict_host_keys)
 
     remote_argv = ["mower-jetson", "probe", "--json"]
 

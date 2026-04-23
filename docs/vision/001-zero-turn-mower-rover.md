@@ -185,7 +185,7 @@ Organized into releases (MVP → final form). Each release contains dependency-o
 | Release | Theme | Phases | Features | Status | Research |
 |---------|-------|--------|----------|--------|----------|
 | Release 1 (MVP) | Bring-up + RTK-only autonomous mowing | 9 | 10 | ✅ Research Complete | [001-mvp-bringup-rtk-mowing.md](/docs/research/001-mvp-bringup-rtk-mowing.md) |
-| Release 2 | Operations & iteration quality | 2 | 3 | ⏳ Not Started | — |
+| Release 2 | Operations & iteration quality | 2 | 3 | ✅ Research Complete | [004-operations-iteration-quality.md](/docs/research/004-operations-iteration-quality.md) |
 | Release 3 (Final) | VSLAM-augmented positioning | 2 | 2 | ⏳ Not Started | — |
 
 ---

@@ -119,6 +119,15 @@ class JetsonClient:
         argv += [target, str(local_path)]
         return argv
 
+    def build_scp_push_argv(self, local_path: Path, remote_path: str) -> list[str]:
+        """Build argv for scp laptop → Jetson."""
+        if self._scp is None:
+            raise SshError("`scp` binary not found on PATH; install the OpenSSH client.")
+        argv: list[str] = [self._scp, *self._common_opts(), "-P", str(self.endpoint.port)]
+        target = f"{self.endpoint.user}@{self.endpoint.host}:{remote_path}"
+        argv += [str(local_path), target]
+        return argv
+
     # -- public API --------------------------------------------------------
 
     def run(
@@ -197,6 +206,36 @@ class JetsonClient:
         if not result.ok:
             raise SshError(
                 f"scp pull failed (exit {result.returncode}): {result.stderr.strip()}"
+            )
+        return result
+
+    def push(
+        self,
+        local_path: Path,
+        remote_path: str,
+        *,
+        timeout: float | None = 600.0,
+    ) -> SshResult:
+        """Copy *local_path* from the laptop to *remote_path* on the Jetson."""
+        argv = self.build_scp_push_argv(local_path, remote_path)
+        env = self._build_env(None)
+        self._log.info("scp_push_start", local=str(local_path), remote=remote_path)
+        try:
+            proc = subprocess.run(
+                argv, capture_output=True, text=True, timeout=timeout, env=env, check=False
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise SshError(f"scp push timed out after {timeout}s: {local_path}") from exc
+        result = SshResult(
+            argv=argv,
+            returncode=proc.returncode,
+            stdout=proc.stdout or "",
+            stderr=proc.stderr or "",
+        )
+        self._log.info("scp_push_done", returncode=result.returncode)
+        if not result.ok:
+            raise SshError(
+                f"scp push failed (exit {result.returncode}): {result.stderr.strip()}"
             )
         return result
 

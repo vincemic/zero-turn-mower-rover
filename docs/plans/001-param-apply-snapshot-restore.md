@@ -2,11 +2,11 @@
 id: "001"
 type: implementation-plan
 title: "Parameter Apply, Snapshot & Restore Workflow"
-status: draft
+status: ✅ Ready for Implementation
 created: 2026-04-19
 updated: 2026-04-19
 owner: pch-planner
-version: v2.0
+version: v2.2
 ---
 
 ## Version History
@@ -21,6 +21,8 @@ version: v2.0
 | v1.5 | 2026-04-19 | pch-planner | Decision #5: retrofit existing commands (option A) |
 | v1.6 | 2026-04-19 | pch-planner | Decision #6: testing strategy (option A) |
 | v2.0 | 2026-04-19 | pch-planner | Holistic review + full execution plan complete |
+| v2.1 | 2026-04-22 | pch-plan-reviewer | Review: confirmed auto-snapshot default (Decision Q1), added Review Session Log |
+| v2.2 | 2026-04-22 | pch-plan-reviewer | Review: fixed load_json_snapshot export, _confirm_restore pattern, dry-run flow, merged 4.1+4.7, added CI verification step |
 
 ## Introduction
 
@@ -259,6 +261,8 @@ def restore_command(
 ) -> None:
 ```
 
+> **Note:** `--dry-run` is NOT a command-level option. It flows through `ctx.obj["dry_run"]` set at the parent `app` level, matching the existing `apply_command` pattern. The command reads it as: `safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)`
+
 **Flow:**
 1. Validate input is a JSON snapshot (check schema field)
 2. Resolve snapshot directory (explicit `--snapshot-dir` or default `./snapshots/params/`)
@@ -267,8 +271,8 @@ def restore_command(
 5. Write pre-apply snapshot to snapshot dir
 6. Diff `pre_apply` vs `desired` (from snapshot); render to console
 7. If diff is empty → print "Already matches", exit 0
-8. Confirmation gate via `@requires_confirmation`
-9. If `--dry-run` → print dry-run message, exit 0
+8. Confirmation gate via `_confirm_restore()` (uses `@requires_confirmation` decorator with `SafetyContext` kwarg, matching `_confirm_apply()` pattern)
+9. If `safety.dry_run` → print dry-run message, return (checked after confirmation gate, matching `apply_command` line 148)
 10. Apply params via `apply_params()`
 11. Fetch autopilot params again → `post_apply` ParamSet
 12. Build `VerifyReport` comparing `desired` vs `post_apply`
@@ -365,7 +369,7 @@ No new external dependencies are introduced.
 | 1.1 | Create `reboot.py` with `REBOOT_REQUIRED_PARAMS` frozenset and `check_reboot_required()` function | `src/mower_rover/params/reboot.py` | Module imports cleanly; `check_reboot_required({"GPS1_TYPE", "SERVO1_FUNCTION"})` returns `["GPS1_TYPE"]`; `check_reboot_required({"SERVO1_FUNCTION"})` returns `[]` |
 | 1.2 | Create `verify.py` with `VerifyReport` dataclass, `build_verify_report()`, and `write_verify_report()` | `src/mower_rover/params/verify.py` | `VerifyReport` has fields: `schema`, `timestamp`, `snapshot_source`, `pre_apply`, `desired`, `post_apply`, `mismatches`, `reboot_required`, `verdict`; `build_verify_report()` returns `PASS` when post matches desired, `FAIL` when mismatches exist; `write_verify_report()` writes valid JSON with schema `mower-rover.params.verify.v1` |
 | 1.3 | Add `default_snapshot_dir()` and `auto_snapshot_path(prefix)` helpers to `io.py` | `src/mower_rover/params/io.py` | `default_snapshot_dir()` returns `Path("./snapshots/params")`; `auto_snapshot_path("params")` returns `Path("./snapshots/params/params-<timestamp>.json")` with UTC ISO timestamp; `auto_snapshot_path("verify")` uses `verify-` prefix; `auto_snapshot_path("params-pre-apply")` uses that prefix |
-| 1.4 | Update `__init__.py` to export new public symbols | `src/mower_rover/params/__init__.py` | `from mower_rover.params import check_reboot_required, VerifyReport, build_verify_report, write_verify_report, default_snapshot_dir, auto_snapshot_path` all resolve |
+| 1.4 | Update `__init__.py` to export new public symbols and fix missing `load_json_snapshot` export | `src/mower_rover/params/__init__.py` | `from mower_rover.params import check_reboot_required, VerifyReport, build_verify_report, write_verify_report, default_snapshot_dir, auto_snapshot_path, load_json_snapshot` all resolve; `load_json_snapshot` is added to `__all__` (currently imported but not exported) |
 | 1.5 | Add unit tests for `reboot.py`, `verify.py`, and new `io.py` helpers | `tests/test_params.py` | Tests: `test_check_reboot_required_returns_matching`, `test_check_reboot_required_empty_when_none_match`, `test_verify_report_pass`, `test_verify_report_fail_with_mismatches`, `test_verify_report_includes_reboot_required`, `test_write_verify_report_json_schema`, `test_default_snapshot_dir`, `test_auto_snapshot_path_format`; all pass with `uv run pytest -m "not field and not sitl"` |
 
 ### Phase 2: Retrofit `snapshot` Command
@@ -412,13 +416,12 @@ No new external dependencies are introduced.
 
 | Step | Task | Files | Acceptance Criteria |
 |------|------|-------|---------------------|
-| 4.1 | Add `restore_command()` to `cli/params.py` with full signature: `snapshot` (required Path), `--port`/`--endpoint`, `--baud`, `--snapshot-dir`, `--yes` | `src/mower_rover/cli/params.py` | `mower params restore --help` displays all options; `snapshot` is a required positional arg |
+| 4.1 | Add `restore_command()` to `cli/params.py` with `@app.command("restore")` decorator and full signature: `snapshot` (required Path), `--port`/`--endpoint`, `--baud`, `--snapshot-dir`, `--yes`. The `@app.command` decorator automatically wires the command into the Typer app. | `src/mower_rover/cli/params.py` | `mower params restore --help` displays all options; `snapshot` is a required positional arg; `mower params restore` appears in `mower params --help` output |
 | 4.2 | Implement input validation: reject non-JSON files and files missing the `mower-rover.params.snapshot.v1` schema field | `src/mower_rover/cli/params.py` | `mower params restore some.yaml` exits with error "restore requires a JSON snapshot"; a JSON file without the schema field exits with error "not a mower-rover param snapshot" |
 | 4.3 | Implement the full restore flow: connect → fetch pre_apply → write pre-apply snapshot → diff → confirm → apply → fetch post_apply → build VerifyReport → write report → render summary | `src/mower_rover/cli/params.py` | Full flow runs (tested via mocked MAVLink in step 4.6); each step logs via structlog with `op="restore"` |
-| 4.4 | Add `_confirm_restore()` function with `@requires_confirmation("Restore parameters from snapshot (this changes flight behaviour)")` | `src/mower_rover/cli/params.py` | Confirmation prompt shown; `--yes` skips it; `--dry-run` skips it and prints dry-run message |
+| 4.4 | Add `_confirm_restore()` function matching the `_confirm_apply()` pattern: `@requires_confirmation("Restore parameters from snapshot (this changes flight behaviour)")` with signature `(*, ctx: SafetyContext, param_count: int, source: str) -> None`. The `ctx` kwarg name must match the decorator's default `ctx_arg="ctx"`. | `src/mower_rover/cli/params.py` | Confirmation prompt shown; `--yes` skips it; dry-run check happens after confirmation gate in `restore_command()` body (matching `apply_command` pattern) |
 | 4.5 | Render human-readable verification summary: param count, mismatches (if any), reboot-required warnings, overall PASS/FAIL verdict | `src/mower_rover/cli/params.py` | Console output shows: "Verified N/N params — PASS" or "FAIL: M mismatches"; reboot warnings listed if any |
 | 4.6 | Add unit tests for `restore` (mocked MAVLink) | `tests/test_params_restore.py` | Tests: `test_restore_rejects_yaml_input`, `test_restore_rejects_non_snapshot_json`, `test_restore_dry_run`, `test_restore_full_flow_pass` (mock fetch→apply→fetch; verify report PASS), `test_restore_full_flow_fail` (mock post-apply with mismatch; verify report FAIL, exit code 1), `test_restore_shows_reboot_warnings`, `test_restore_already_matches` (diff empty → exit 0 with no apply) |
-| 4.7 | Wire `restore` command into the params Typer app | `src/mower_rover/cli/params.py` | `mower params restore` appears in `mower params --help` output |
 
 ### Phase 5: SITL Integration Tests
 
@@ -435,10 +438,61 @@ No new external dependencies are introduced.
 | 5.2 | Add `test_params_apply_auto_snapshot_against_sitl` — invoke apply with baseline, verify pre-apply snapshot auto-written | `tests/test_params_sitl.py` | Pre-apply snapshot exists at `./snapshots/params/params-pre-apply-*.json` |
 | 5.3 | Add `test_params_restore_round_trip_against_sitl` — full cycle: snapshot → apply different values → restore from snapshot → verify report PASS | `tests/test_params_sitl.py` | Verification report exists at `./snapshots/params/verify-*.json`; JSON `verdict` field is `"PASS"`; post-apply params match original snapshot values for the modified params |
 | 5.4 | Add `test_params_restore_dry_run_against_sitl` — `restore --dry-run` connects and shows diff but writes nothing | `tests/test_params_sitl.py` | Exit code 0; no params changed on SITL (re-snapshot matches pre state); console output contains "dry-run" |
+| 5.5 | Run full CI verification: `uv run ruff check . && uv run mypy && uv run pytest -m "not field and not sitl"` | — | All three commands pass; no regressions from plan 001 changes |
 
 ## Standards
 
 No organizational standards applicable to this plan.
+
+### Implementation Complexity
+
+| Factor | Score (1-5) | Notes |
+|--------|-------------|-------|
+| Files to modify | 3 | 7 files (3 new, 4 modified) across `src/` and `tests/` |
+| New patterns introduced | 2 | VerifyReport dataclass + JSON verification report; reboot-required check. Both follow existing `ParamDiff`/snapshot patterns |
+| External dependencies | 1 | None new — uses existing `pymavlink`, `typer`, `structlog` |
+| Migration complexity | 1 | N/A — no DB, no data migration |
+| Test coverage required | 3 | 8 unit tests + 4 SITL tests + regression on existing 175 tests |
+| **Overall Complexity** | **10/25** | **Low** |
+
+## Review Summary
+
+**Review Date:** 2026-04-22
+**Reviewer:** pch-plan-reviewer
+**Original Plan Version:** v2.0
+**Reviewed Plan Version:** v2.2
+
+### Review Metrics
+- Issues Found: 8 (Critical: 0, Major: 2, Minor: 6)
+- Clarifying Questions Asked: 2
+- Sections Updated: Phase 1 step 1.4, Phase 4 steps 4.1/4.4/4.7, restore command signature, Phase 5 step 5.5, Review Session Log
+
+### Key Improvements Made
+1. Fixed `load_json_snapshot` missing from `__all__` — added to Phase 1 step 1.4 export task
+2. Confirmed `apply` auto-snapshot default matches user's Decision #5 and NFR-1
+3. Corrected `_confirm_restore()` signature to match existing `_confirm_apply()` pattern (`*, ctx: SafetyContext`)
+4. Clarified that `--dry-run` flows via `ctx.obj["dry_run"]` from the parent app, not as a command option
+5. Merged Phase 4 step 4.7 into step 4.1 (redundant — `@app.command` decorator already wires the command)
+6. Added Phase 5 step 5.5 — full CI verification step (lesson learned from plan 003's uv.lock gap)
+
+### Remaining Considerations
+- R-5 (superseded RC params in baseline YAML) remains an acknowledged risk outside this plan's scope
+- CWD-relative snapshot paths (R-4) are acceptable for single-operator use but should be documented in operator README
+- SITL tests (Phase 5) require WSL2 ArduPilot SITL; these should be marked `@pytest.mark.sitl` and excluded from CI
+
+### Sign-off
+This plan has been reviewed and is **Ready for Implementation**.
+
+## Review Session Log
+
+**Questions Pending:** 0
+**Questions Resolved:** 2
+**Last Updated:** 2026-04-22
+
+| # | Issue | Category | Decision | Plan Update |
+|---|-------|----------|----------|-------------|
+| 1 | `apply` retrofit: auto-snapshot by default vs opt-in | correctness | Option A: Auto-snapshot by default, `--no-snapshot` to opt out | Phase 3 confirmed as-is; matches Decision #5 and NFR-1 |
+| 2 | `load_json_snapshot` missing from `__all__` + minor fixes | correctness | Option A: Fix all 5 items | Phase 1 step 1.4 updated; Phase 4 steps 4.1, 4.4 corrected; 4.7 merged into 4.1; dry-run note added to restore signature; Phase 5 step 5.5 added |
 
 ## Handoff
 
@@ -446,6 +500,8 @@ No organizational standards applicable to this plan.
 |-------|-------|
 | Created By | pch-planner |
 | Created Date | 2026-04-19 |
-| Status | ⏳ Pending Review |
-| Next Agent | pch-plan-reviewer |
+| Reviewed By | pch-plan-reviewer |
+| Review Date | 2026-04-22 |
+| Status | ✅ Ready for Implementation |
+| Next Agent | pch-coder |
 | Plan Location | /docs/plans/001-param-apply-snapshot-restore.md |

@@ -7,21 +7,22 @@ created: "2026-04-22"
 updated: "2026-04-22"
 completed: "2026-04-22"
 owner: pch-planner
-version: v3.0
+version: v3.1
 ---
 
 ## Version History
 
 | Version | Date | Author | Changes |
-|---------|------|--------|---------|
+|---------|------|--------|--------|
 | v1.0 | 2026-04-22 | pch-planner | Initial plan creation |
 | v2.0 | 2026-04-22 | pch-planner | Holistic review completed; plan finalized |
 | v2.1 | 2026-04-22 | pch-plan-reviewer | Review fixes: corrected SIM105 block reference, file/line counts, Phase 4 verification, type-ignore rationale |
 | v3.0 | 2026-04-22 | pch-coder | Implementation complete — all 4 phases executed, all checks passing |
+| v3.1 | 2026-04-22 | pch-planner | Post-implementation update: corrected error counts, type-ignore approach, documented CI uv.lock gap and lessons learned |
 
 ## Introduction
 
-CI is failing on `ruff check` and `mypy` steps while all 175 pytest tests pass. This plan covers fixing all **28 Ruff errors** (14 auto-fixable, 14 manual) and **5 Mypy errors** (all in one file) identified in [research 003](../research/003-ci-lint-typecheck-failures.md). No logic changes are required — only formatting, imports, type annotations, and config.
+CI is failing on `ruff check` and `mypy` steps while all 175 pytest tests pass. This plan covers fixing all **29 Ruff errors** (15 auto-fixable, 14 manual) and **5 Mypy errors** (all in one file) identified in [research 003](../research/003-ci-lint-typecheck-failures.md). No logic changes are required — only formatting, imports, type annotations, and config.
 
 ## Planning Session Log
 
@@ -43,7 +44,7 @@ No user decisions required — all fixes are deterministic and catalogued in res
 
 ### Trade-offs Accepted
 
-- Using `# type: ignore[union-attr, attr-defined]` keeps both error codes suppressed so the comment works whether or not `sdnotify` is installed. Note: with the `_notifier: object` annotation, the actual error is always `attr-defined`; `union-attr` is included defensively in case the annotation is later narrowed to a union type. This is the minimal-change approach vs. restructuring the notifier typing.
+- **Type-ignore approach (revised during implementation):** The plan originally proposed `# type: ignore[union-attr, attr-defined]` to defensively cover both error codes. During implementation, mypy's `warn_unused_ignores` (enabled by strict mode) flagged the unused `union-attr` code, so only `# type: ignore[attr-defined]` was used. This is correct because `_notifier` is typed as `object` (not a union), making `attr-defined` the only actual error.
 
 ### Risks Acknowledged
 
@@ -57,9 +58,10 @@ Fix all CI-blocking lint (Ruff) and type-check (Mypy) errors so the pipeline goe
 
 ### Objectives
 
-1. Resolve all 28 Ruff violations (14 auto-fix, 14 manual)
+1. Resolve all 29 Ruff violations (15 auto-fix, 14 manual)
 2. Resolve all 5 Mypy errors (sdnotify stubs + type-ignore comments)
 3. Verify full CI pass: `ruff check . && mypy && pytest -m "not field and not sitl"`
+4. ~~Ensure GitHub Actions CI pipeline passes~~ *(added post-implementation — see Lessons Learned)*
 
 ## Requirements
 
@@ -106,7 +108,7 @@ No data entities in scope — data contracts not applicable.
 
 ### Approach
 
-**Step 1 — Auto-fix (14 errors):** Run `ruff check --fix .` to resolve all F401, I001, UP035, and F541 violations in one shot.
+**Step 1 — Auto-fix (15 errors):** Run `ruff check --fix .` to resolve all F401, I001, UP035, and F541 violations in one shot.
 
 **Step 2 — Manual Ruff fixes (14 errors):**
 - **E501 (10 lines):** Break long lines across 5 files to stay ≤ 100 chars
@@ -134,6 +136,7 @@ No data entities in scope — data contracts not applicable.
 | Auto-fix changes behavior | Very Low | Medium | Ruff `--fix` only touches imports + formatting; verify with pytest |
 | Line-break changes readability | Low | Low | Follow existing style; keep logical grouping |
 | type-ignore comment drift | Low | Low | Use specific error codes, not blanket ignores |
+| **uv.lock not in repo (MISSED)** | **High** | **High** | **Was not identified pre-implementation; see Lessons Learned** |
 
 ## Execution Plan
 
@@ -141,10 +144,10 @@ No data entities in scope — data contracts not applicable.
 
 **Status:** ✅ Complete
 **Size:** Small
-**Files to Modify:** 8
+**Files to Modify:** 8 *(actual: 7 — `tests/test_setup.py` had no auto-fixable errors)*
 **Prerequisites:** None
 **Entry Point:** Project root
-**Verification:** `uv run ruff check .` error count drops from 28 to 14
+**Verification:** `uv run ruff check .` error count drops from 29 to 14 *(actual: 15 auto-fixed, 14 remaining)*
 
 | Step | Task | Files | Acceptance Criteria |
 |------|------|-------|---------------------|
@@ -293,3 +296,26 @@ This plan has been reviewed and is **Ready for Implementation**.
 **Total tasks completed:** 20
 **Total files modified/created:** 10 files modified, 0 created
 **Code review:** Clean — no issues found
+
+### Post-Implementation: CI Pipeline Fix
+**Discovered:** 2026-04-22 (after push)
+**Root Cause:** `uv.lock` was listed in `.gitignore` (line 10), so it was never committed to the repo. The `astral-sh/setup-uv@v3` action with `enable-cache: true` uses `**/uv.lock` as its cache key — when the file is missing, both matrix jobs (ubuntu-latest, windows-latest) fail with: *"No file matched to [**/uv.lock]"*
+**Fix Applied:** Removed `uv.lock` from `.gitignore` and committed the lockfile (commit `7705b5f`).
+**Files Modified:** `.gitignore`, `uv.lock`
+**Additional Warnings (non-blocking):** Both jobs emit Node.js 20 deprecation warnings for `actions/checkout@v4` and `astral-sh/setup-uv@v3`. These become forced Node.js 24 on June 2, 2026. Tracked for future update.
+
+## Lessons Learned
+
+### 1. Plan scope missed CI infrastructure dependency
+**Issue:** The plan focused exclusively on fixing lint/typecheck errors visible in local `ruff check` and `mypy` output, but did not verify the CI *pipeline* itself would pass. The `.gitignore` excluding `uv.lock` was a pre-existing issue unrelated to lint errors, but it meant CI would fail regardless of code fixes.
+**Root Cause:** Research 003 catalogued only ruff/mypy errors. Neither the planner nor reviewer checked `.gitignore` or the workflow file for infrastructure issues.
+**Recommendation:** For any plan whose objective is "make CI green", include a phase-0 step to review the workflow file (`ci.yml`) and verify all referenced artifacts (lockfiles, caches, action versions) are present in the repo.
+
+### 2. `warn_unused_ignores` invalidated defensive type-ignore approach
+**Issue:** The plan proposed `# type: ignore[union-attr, attr-defined]` as a defensive measure. Mypy strict mode enables `warn_unused_ignores`, which flags the unused `union-attr` code — so the plan's recommendation would itself introduce a new mypy error.
+**Root Cause:** The reviewer noted the rationale but did not verify the interaction with `warn_unused_ignores`.
+**Recommendation:** When planning type-ignore comments, always check whether `warn_unused_ignores` is enabled (it is under `strict = true`) and avoid suppressing error codes that don't actually fire.
+
+### 3. Auto-fix error count was slightly off
+**Issue:** Plan said 28 total / 14 auto-fixable. Actual was 29 total / 15 auto-fixable. The difference is minor but indicates the research error catalogue had a counting discrepancy.
+**Recommendation:** Run `ruff check . --statistics` as the authoritative count rather than manually tallying from the error list.
