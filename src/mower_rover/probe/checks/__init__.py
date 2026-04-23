@@ -11,4 +11,5 @@ from mower_rover.probe.checks import (  # noqa: F401
     python_ver,
     ssh_hardening,
     thermal,
+    usb_tuning,
 )

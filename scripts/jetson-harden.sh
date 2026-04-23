@@ -239,6 +239,107 @@ SSHEOF
 }
 
 # ---------------------------------------------------------------------------
+# 10. OAK-D udev rules — permissions, autosuspend disable, symlink
+# ---------------------------------------------------------------------------
+harden_oakd_udev() {
+    local rules_file="/etc/udev/rules.d/80-oakd-usb.rules"
+    local rules_content
+    rules_content=$(cat <<'UDEV'
+# /etc/udev/rules.d/80-oakd-usb.rules
+# 1. Grant non-root access to OAK-D (Movidius VPU vendor ID 03e7)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"
+
+# 2. Disable USB autosuspend for the device
+SUBSYSTEM=="usb", ATTR{idVendor}=="03e7", ATTR{power/autosuspend}="-1"
+SUBSYSTEM=="usb", ATTR{idVendor}=="03e7", ATTR{power/control}="on"
+
+# 3. Create a stable symlink for the OAK-D
+SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", SYMLINK+="oakd"
+UDEV
+)
+
+    if [[ -f "$rules_file" ]] && echo "$rules_content" | diff -q - "$rules_file" &>/dev/null; then
+        STATUS[oakd_udev]="already"
+    else
+        echo "$rules_content" > "$rules_file"
+        udevadm control --reload-rules && udevadm trigger
+        STATUS[oakd_udev]="applied"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 11. USB kernel params — autosuspend disable, usbfs buffer increase
+# ---------------------------------------------------------------------------
+harden_usb_params() {
+    local extlinux="/boot/extlinux/extlinux.conf"
+
+    if [[ ! -f "$extlinux" ]]; then
+        STATUS[usb_params]="skip:no_extlinux"
+        return
+    fi
+
+    local need_autosuspend=false
+    local need_usbfs=false
+
+    if ! grep -q 'usbcore\.autosuspend=-1' "$extlinux"; then
+        need_autosuspend=true
+    fi
+    if ! grep -q 'usbcore\.usbfs_memory_mb=1000' "$extlinux"; then
+        need_usbfs=true
+    fi
+
+    if ! $need_autosuspend && ! $need_usbfs; then
+        STATUS[usb_params]="already"
+        return
+    fi
+
+    cp "$extlinux" "${extlinux}.bak"
+    echo "  extlinux backup saved to ${extlinux}.bak"
+
+    if $need_autosuspend; then
+        sed -i '/^\s*APPEND / s/$/ usbcore.autosuspend=-1/' "$extlinux"
+    fi
+    if $need_usbfs; then
+        sed -i '/^\s*APPEND / s/$/ usbcore.usbfs_memory_mb=1000/' "$extlinux"
+    fi
+
+    echo "  extlinux diff:"
+    diff "${extlinux}.bak" "$extlinux" || true
+    STATUS[usb_params]="applied"
+}
+
+# ---------------------------------------------------------------------------
+# 12. jetson_clocks — lock clocks at boot via systemd service
+# ---------------------------------------------------------------------------
+harden_jetson_clocks() {
+    local svc_file="/etc/systemd/system/jetson-clocks.service"
+    local svc_content
+    svc_content=$(cat <<'JCLOCKS'
+[Unit]
+Description=Lock Jetson clocks to nvpmodel maximums
+After=nvpmodel.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/jetson_clocks
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+JCLOCKS
+)
+
+    if [[ -f "$svc_file" ]] && echo "$svc_content" | diff -q - "$svc_file" &>/dev/null; then
+        STATUS[jetson_clocks]="already"
+    else
+        echo "$svc_content" > "$svc_file"
+        systemctl daemon-reload
+        systemctl enable jetson-clocks.service
+        STATUS[jetson_clocks]="applied"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 print_summary() {
@@ -258,6 +359,9 @@ print_summary() {
         "watchdog:Hardware watchdog (30s)"
         "apt_hold:apt-mark hold L4T packages"
         "ssh_hardening:SSH hardening (sshd drop-in)"
+        "oakd_udev:OAK-D udev rules (80-oakd-usb.rules)"
+        "usb_params:USB kernel params (autosuspend, usbfs_memory_mb)"
+        "jetson_clocks:jetson_clocks service (lock clocks at boot)"
     )
     for entry in "${labels[@]}"; do
         local key="${entry%%:*}"
@@ -267,6 +371,8 @@ print_summary() {
             printf "  ✓  %s\n" "$label"
         elif [[ "$st" == "already" ]]; then
             printf "  ●  %s (already configured)\n" "$label"
+        elif [[ "$st" == skip:* ]]; then
+            printf "  ⊘  %s (skipped: %s)\n" "$label" "${st#skip:}"
         else
             printf "  ?  %s (unknown)\n" "$label"
         fi
@@ -288,32 +394,41 @@ main() {
         exit 1
     fi
 
-    echo "[1/9] Headless mode..."
+    echo "[1/12] Headless mode..."
     harden_headless
 
-    echo "[2/9] Disabling unnecessary services..."
+    echo "[2/12] Disabling unnecessary services..."
     harden_services
 
-    echo "[3/9] Filesystem tuning..."
+    echo "[3/12] Filesystem tuning..."
     harden_fstab
 
-    echo "[4/9] Log rotation & journald limits..."
+    echo "[4/12] Log rotation & journald limits..."
     harden_logrotate
 
-    echo "[5/9] OpenBLAS ARM fix..."
+    echo "[5/12] OpenBLAS ARM fix..."
     harden_openblas
 
-    echo "[6/9] nvpmodel (50W)..."
+    echo "[6/12] nvpmodel (50W)..."
     harden_nvpmodel
 
-    echo "[7/9] Hardware watchdog..."
+    echo "[7/12] Hardware watchdog..."
     harden_watchdog
 
-    echo "[8/9] apt-mark hold L4T packages..."
+    echo "[8/12] apt-mark hold L4T packages..."
     harden_apt_hold
 
-    echo "[9/9] SSH hardening..."
+    echo "[9/12] SSH hardening..."
     harden_ssh
+
+    echo "[10/12] OAK-D udev rules..."
+    harden_oakd_udev
+
+    echo "[11/12] USB kernel params..."
+    harden_usb_params
+
+    echo "[12/12] jetson_clocks service..."
+    harden_jetson_clocks
 
     print_summary
 }

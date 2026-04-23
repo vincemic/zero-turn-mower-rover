@@ -31,6 +31,7 @@ dev = [
 ]
 jetson = [
     "sdnotify>=0.3",
+    "depthai>=3.5.0",
 ]
 
 [build-system]
@@ -71,4 +72,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["sdnotify.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["depthai.*"]
 ignore_missing_imports = true

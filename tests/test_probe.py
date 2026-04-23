@@ -45,6 +45,9 @@ class TestRegistry:
             "oakd",
             "thermal",
             "power_mode",
+            "oakd_usb_autosuspend",
+            "oakd_usbfs_memory",
+            "oakd_thermal_gate",
         }
         assert expected.issubset(set(_REGISTRY.keys()))
 
@@ -424,14 +427,45 @@ class TestSshHardeningCheck:
 
 
 class TestOakdCheck:
-    def test_pass_device_present(self, tmp_path: Path) -> None:
+    def test_pass_superspeed(self, tmp_path: Path) -> None:
+        usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
+        usb_dev.mkdir(parents=True)
+        (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
+        (usb_dev / "speed").write_text("5000\n", encoding="utf-8")
+        fn = _REGISTRY["oakd"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "USB 5000 Mbps" in detail
+
+    def test_pass_superspeed_plus(self, tmp_path: Path) -> None:
+        usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
+        usb_dev.mkdir(parents=True)
+        (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
+        (usb_dev / "speed").write_text("10000\n", encoding="utf-8")
+        fn = _REGISTRY["oakd"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "USB 10000 Mbps" in detail
+
+    def test_fail_usb2(self, tmp_path: Path) -> None:
+        usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
+        usb_dev.mkdir(parents=True)
+        (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
+        (usb_dev / "speed").write_text("480\n", encoding="utf-8")
+        fn = _REGISTRY["oakd"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "USB 480 Mbps" in detail
+        assert "5000" in detail
+
+    def test_pass_no_speed_file(self, tmp_path: Path) -> None:
         usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
         usb_dev.mkdir(parents=True)
         (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
         fn = _REGISTRY["oakd"].fn
         passed, detail = fn(tmp_path)
         assert passed is True
-        assert "03e7" in detail
+        assert "speed unknown" in detail
 
     def test_fail_no_device(self, tmp_path: Path) -> None:
         fn = _REGISTRY["oakd"].fn
@@ -447,6 +481,10 @@ class TestOakdCheck:
         passed, detail = fn(tmp_path)
         assert passed is False
         assert "No OAK device" in detail
+
+    def test_severity_is_critical(self) -> None:
+        spec = _REGISTRY["oakd"]
+        assert spec.severity == Severity.CRITICAL
 
 
 class TestThermalCheck:
@@ -504,3 +542,101 @@ class TestPowerModeCheck:
             passed, detail = fn(tmp_path)
         assert passed is False
         assert "nvpmodel not found" in detail
+
+
+# ---------------------------------------------------------------------------
+# USB tuning check tests
+# ---------------------------------------------------------------------------
+
+
+class TestUsbAutosuspendCheck:
+    def test_pass_disabled(self, tmp_path: Path) -> None:
+        param = tmp_path / "sys" / "module" / "usbcore" / "parameters"
+        param.mkdir(parents=True)
+        (param / "autosuspend").write_text("-1\n", encoding="utf-8")
+        fn = _REGISTRY["oakd_usb_autosuspend"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "-1" in detail
+
+    def test_fail_enabled(self, tmp_path: Path) -> None:
+        param = tmp_path / "sys" / "module" / "usbcore" / "parameters"
+        param.mkdir(parents=True)
+        (param / "autosuspend").write_text("2\n", encoding="utf-8")
+        fn = _REGISTRY["oakd_usb_autosuspend"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "autosuspend=2" in detail
+
+    def test_fail_missing_file(self, tmp_path: Path) -> None:
+        fn = _REGISTRY["oakd_usb_autosuspend"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "missing sysfs" in detail
+
+
+class TestUsbfsMemoryCheck:
+    def test_pass_1000(self, tmp_path: Path) -> None:
+        param = tmp_path / "sys" / "module" / "usbcore" / "parameters"
+        param.mkdir(parents=True)
+        (param / "usbfs_memory_mb").write_text("1000\n", encoding="utf-8")
+        fn = _REGISTRY["oakd_usbfs_memory"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "1000" in detail
+
+    def test_pass_2000(self, tmp_path: Path) -> None:
+        param = tmp_path / "sys" / "module" / "usbcore" / "parameters"
+        param.mkdir(parents=True)
+        (param / "usbfs_memory_mb").write_text("2000\n", encoding="utf-8")
+        fn = _REGISTRY["oakd_usbfs_memory"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "2000" in detail
+
+    def test_fail_low(self, tmp_path: Path) -> None:
+        param = tmp_path / "sys" / "module" / "usbcore" / "parameters"
+        param.mkdir(parents=True)
+        (param / "usbfs_memory_mb").write_text("16\n", encoding="utf-8")
+        fn = _REGISTRY["oakd_usbfs_memory"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "16" in detail
+        assert "1000" in detail
+
+    def test_fail_missing_file(self, tmp_path: Path) -> None:
+        fn = _REGISTRY["oakd_usbfs_memory"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "missing sysfs" in detail
+
+
+class TestThermalGateCheck:
+    def test_pass_cool(self, tmp_path: Path) -> None:
+        base = tmp_path / "sys" / "class" / "thermal"
+        zone0 = base / "thermal_zone0"
+        zone0.mkdir(parents=True)
+        (zone0 / "temp").write_text("60000\n", encoding="utf-8")
+        (zone0 / "type").write_text("CPU-therm\n", encoding="utf-8")
+        fn = _REGISTRY["oakd_thermal_gate"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "60.0" in detail
+
+    def test_fail_hot(self, tmp_path: Path) -> None:
+        base = tmp_path / "sys" / "class" / "thermal"
+        zone0 = base / "thermal_zone0"
+        zone0.mkdir(parents=True)
+        (zone0 / "temp").write_text("86000\n", encoding="utf-8")
+        (zone0 / "type").write_text("GPU-therm\n", encoding="utf-8")
+        fn = _REGISTRY["oakd_thermal_gate"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "86" in detail
+        assert "85" in detail
+
+    def test_pass_no_zones(self, tmp_path: Path) -> None:
+        fn = _REGISTRY["oakd_thermal_gate"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "No thermal zones" in detail
