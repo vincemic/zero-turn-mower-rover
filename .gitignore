@@ -7,7 +7,6 @@ build/
 dist/
 .venv/
 .uv/
-uv.lock
 
 # Test / coverage
 .pytest_cache/
