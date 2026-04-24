@@ -505,9 +505,8 @@ def _run_pixhawk_udev(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Creating runtime directories…")
     try:
         result = client.run(
-            [f"sudo mkdir -p /var/lib/mower /etc/mower"
-             f" && sudo chown {jetson_user}:{jetson_user} /var/lib/mower /etc/mower"
-             f" && mkdir -p /run/mower"],
+            [f"sudo mkdir -p /var/lib/mower /etc/mower /run/mower"
+             f" && sudo chown {jetson_user}:{jetson_user} /var/lib/mower /etc/mower /run/mower"],
             timeout=30,
         )
     except SshError as exc:

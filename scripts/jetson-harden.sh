@@ -280,6 +280,7 @@ harden_usb_params() {
 
     local need_autosuspend=false
     local need_usbfs=false
+    local need_quirks=false
 
     if ! grep -q 'usbcore\.autosuspend=-1' "$extlinux"; then
         need_autosuspend=true
@@ -287,8 +288,13 @@ harden_usb_params() {
     if ! grep -q 'usbcore\.usbfs_memory_mb=1000' "$extlinux"; then
         need_usbfs=true
     fi
+    # Disable LPM (U1/U2) for Movidius MyriadX — the Realtek hub on the AGX
+    # Orin carrier board drops the SuperSpeed link after ~200ms without this.
+    if ! grep -q 'usbcore\.quirks=03e7:2485:gk' "$extlinux"; then
+        need_quirks=true
+    fi
 
-    if ! $need_autosuspend && ! $need_usbfs; then
+    if ! $need_autosuspend && ! $need_usbfs && ! $need_quirks; then
         STATUS[usb_params]="already"
         return
     fi
@@ -301,6 +307,9 @@ harden_usb_params() {
     fi
     if $need_usbfs; then
         sed -i '/^\s*APPEND / s/$/ usbcore.usbfs_memory_mb=1000/' "$extlinux"
+    fi
+    if $need_quirks; then
+        sed -i '/^\s*APPEND / s/$/ usbcore.quirks=03e7:2485:gk/' "$extlinux"
     fi
 
     echo "  extlinux diff:"
@@ -343,7 +352,7 @@ JCLOCKS
 # 13. RTAB-Map — build from source with CUDA/OpenCV
 # ---------------------------------------------------------------------------
 harden_rtabmap() {
-    local tag="v0.23.1"
+    local tag="0.23.2"
     local src_dir="/opt/rtabmap-src"
 
     # Already installed?

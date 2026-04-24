@@ -23,6 +23,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -43,9 +44,12 @@
 
 /* RTAB-Map core. */
 #include <rtabmap/core/CameraModel.h>
+#include <rtabmap/core/StereoCameraModel.h>
+#include <rtabmap/core/IMU.h>
 #include <rtabmap/core/Memory.h>
 #include <rtabmap/core/Odometry.h>
-#include <rtabmap/core/OdometryF2M.h>
+#include <rtabmap/core/OdometryInfo.h>
+#include <rtabmap/core/odometry/OdometryF2M.h>
 #include <rtabmap/core/Parameters.h>
 #include <rtabmap/core/Rtabmap.h>
 #include <rtabmap/core/SensorData.h>
@@ -145,16 +149,16 @@ static SlamConfig load_config(const std::string &path) {
  * Stereo resolution helper
  * -------------------------------------------------------------------------- */
 
-static dai::MonoCameraProperties::SensorResolution
+static std::pair<uint32_t, uint32_t>
 resolve_mono_resolution(const std::string &res) {
     if (res == "480p")
-        return dai::MonoCameraProperties::SensorResolution::THE_480_P;
+        return {640, 480};
     if (res == "720p")
-        return dai::MonoCameraProperties::SensorResolution::THE_720_P;
+        return {1280, 720};
     if (res == "800p")
-        return dai::MonoCameraProperties::SensorResolution::THE_800_P;
+        return {1280, 800};
     /* Default: 400p. */
-    return dai::MonoCameraProperties::SensorResolution::THE_400_P;
+    return {640, 400};
 }
 
 /* --------------------------------------------------------------------------
@@ -163,83 +167,88 @@ resolve_mono_resolution(const std::string &res) {
 
 struct DaiPipeline {
     std::shared_ptr<dai::Device> device;
-    std::shared_ptr<dai::DataOutputQueue> stereo_queue;
-    std::shared_ptr<dai::DataOutputQueue> left_queue;
-    std::shared_ptr<dai::DataOutputQueue> right_queue;
-    std::shared_ptr<dai::DataOutputQueue> imu_queue;
+    std::optional<dai::Pipeline> pipeline;
+    std::shared_ptr<dai::MessageQueue> depth_queue;
+    std::shared_ptr<dai::MessageQueue> left_queue;
+    std::shared_ptr<dai::MessageQueue> right_queue;
+    std::shared_ptr<dai::MessageQueue> imu_queue;
 };
 
 static DaiPipeline create_depthai_pipeline(const SlamConfig &cfg) {
-    dai::Pipeline pipeline;
+    DaiPipeline result;
 
-    /* Mono cameras. */
-    auto mono_left = pipeline.create<dai::node::MonoCamera>();
-    auto mono_right = pipeline.create<dai::node::MonoCamera>();
+    /* Create device first, then pass to pipeline.
+     *
+     * Force USB 2.0 (HIGH) speed via BoardConfig to prevent the
+     * MyriadX from re-enumerating across USB buses on Jetson AGX
+     * Orin.  The bootloader attaches via a USB 2.0 hub on bus 1;
+     * if allowed to negotiate SuperSpeed the booted device
+     * reappears on bus 2 and the XLink search fails.  400p stereo
+     * + IMU fits well within USB 2.0 bandwidth (~30 MB/s vs
+     * 35-40 MB/s practical).
+     */
+    dai::DeviceBase::Config dev_cfg;
+    dev_cfg.board.usb.maxSpeed = dai::UsbSpeed::HIGH;
+    result.device = std::make_shared<dai::Device>(dev_cfg);
+    std::cerr << "[depthai] Device opened: "
+              << result.device->getDeviceId() << std::endl;
+
+    result.pipeline.emplace(result.device);
+
     auto resolution = resolve_mono_resolution(cfg.stereo_resolution);
-    mono_left->setResolution(resolution);
-    mono_left->setBoardSocket(dai::CameraBoardSocket::CAM_B);
-    mono_left->setFps(static_cast<float>(cfg.stereo_fps));
-    mono_right->setResolution(resolution);
-    mono_right->setBoardSocket(dai::CameraBoardSocket::CAM_C);
-    mono_right->setFps(static_cast<float>(cfg.stereo_fps));
+
+    /* Camera nodes (v3 API: Camera replaces MonoCamera). */
+    auto cam_left = result.pipeline->create<dai::node::Camera>();
+    cam_left->build(dai::CameraBoardSocket::CAM_B,
+                    std::optional<std::pair<uint32_t, uint32_t>>(std::nullopt),
+                    static_cast<float>(cfg.stereo_fps));
+    auto *left_out = cam_left->requestOutput(resolution);
+
+    auto cam_right = result.pipeline->create<dai::node::Camera>();
+    cam_right->build(dai::CameraBoardSocket::CAM_C,
+                     std::optional<std::pair<uint32_t, uint32_t>>(std::nullopt),
+                     static_cast<float>(cfg.stereo_fps));
+    auto *right_out = cam_right->requestOutput(resolution);
 
     /* Stereo depth. */
-    auto stereo = pipeline.create<dai::node::StereoDepth>();
-    stereo->setDefaultProfilePreset(
-        dai::node::StereoDepth::PresetMode::HIGH_DENSITY);
+    auto stereo = result.pipeline->create<dai::node::StereoDepth>();
+    stereo->build(*left_out, *right_out,
+                  dai::node::StereoDepth::PresetMode::DENSITY);
     stereo->setLeftRightCheck(true);
     stereo->setSubpixel(true);
     stereo->setExtendedDisparity(false);
-    mono_left->out.link(stereo->left);
-    mono_right->out.link(stereo->right);
 
-    /* Depth output. */
-    auto xout_depth = pipeline.create<dai::node::XLinkOut>();
-    xout_depth->setStreamName("depth");
-    stereo->depth.link(xout_depth->input);
-
-    /* Left rectified output (for RTAB-Map). */
-    auto xout_left = pipeline.create<dai::node::XLinkOut>();
-    xout_left->setStreamName("rectified_left");
-    stereo->rectifiedLeft.link(xout_left->input);
-
-    /* Right rectified output (for RTAB-Map). */
-    auto xout_right = pipeline.create<dai::node::XLinkOut>();
-    xout_right->setStreamName("rectified_right");
-    stereo->rectifiedRight.link(xout_right->input);
+    /* Output queues directly from node outputs (v3 — no XLinkOut). */
+    result.depth_queue = stereo->depth.createOutputQueue(4, false);
+    result.left_queue = stereo->rectifiedLeft.createOutputQueue(4, false);
+    result.right_queue = stereo->rectifiedRight.createOutputQueue(4, false);
 
     /* IMU. */
-    auto imu = pipeline.create<dai::node::IMU>();
+    auto imu = result.pipeline->create<dai::node::IMU>();
     imu->enableIMUSensor(
         dai::IMUSensor::ACCELEROMETER_RAW, cfg.imu_rate_hz);
     imu->enableIMUSensor(
         dai::IMUSensor::GYROSCOPE_RAW, cfg.imu_rate_hz);
     imu->setBatchReportThreshold(1);
     imu->setMaxBatchReports(10);
-    auto xout_imu = pipeline.create<dai::node::XLinkOut>();
-    xout_imu->setStreamName("imu");
-    imu->out.link(xout_imu->input);
+    result.imu_queue = imu->out.createOutputQueue(50, false);
 
-    /* Start device. */
-    std::cerr << "[depthai] Starting device..." << std::endl;
-    auto device = std::make_shared<dai::Device>(pipeline);
-    std::cerr << "[depthai] Device started: "
-              << device->getDeviceId() << std::endl;
-
-    auto calib = device->readCalibration();
+    /* Read calibration (at the requested output resolution). */
+    auto calib = result.device->readCalibration();
     auto intrinsics = calib.getCameraIntrinsics(
-        dai::CameraBoardSocket::CAM_B);
-    std::cerr << "[depthai] Left camera fx=" << intrinsics[0][0]
+        dai::CameraBoardSocket::CAM_B,
+        resolution.first, resolution.second);
+    std::cerr << "[depthai] Left camera @" << resolution.first
+              << "x" << resolution.second
+              << " fx=" << intrinsics[0][0]
               << " fy=" << intrinsics[1][1]
               << " cx=" << intrinsics[0][2]
               << " cy=" << intrinsics[1][2] << std::endl;
 
-    DaiPipeline result;
-    result.device = device;
-    result.stereo_queue = device->getOutputQueue("depth", 4, false);
-    result.left_queue = device->getOutputQueue("rectified_left", 4, false);
-    result.right_queue = device->getOutputQueue("rectified_right", 4, false);
-    result.imu_queue = device->getOutputQueue("imu", 50, false);
+    /* Start the pipeline. */
+    result.pipeline->start();
+    std::cerr << "[depthai] Pipeline started" << std::endl;
+
     return result;
 }
 
@@ -487,14 +496,15 @@ static void run_slam_loop(
 
     uint64_t frame_count = 0;
 
-    /* Get baseline calibration for camera model. */
+    /* Get baseline calibration for camera model.
+     * getBaselineDistance() can return negative depending on camera
+     * order.  RTAB-Map's StereoCameraModel expects a positive baseline
+     * and the right P matrix Tx = -fx * baseline (negative).  Force
+     * positive here.
+     */
     auto calib = dai.device->readCalibration();
-    auto intrinsics_left = calib.getCameraIntrinsics(
-        dai::CameraBoardSocket::CAM_B);
-    auto intrinsics_right = calib.getCameraIntrinsics(
-        dai::CameraBoardSocket::CAM_C);
-    double baseline = calib.getBaselineDistance(
-        dai::CameraBoardSocket::CAM_B, dai::CameraBoardSocket::CAM_C) / 100.0;
+    double baseline = std::abs(calib.getBaselineDistance(
+        dai::CameraBoardSocket::CAM_B, dai::CameraBoardSocket::CAM_C) / 100.0);
 
     /* Get image size from first left frame. */
     int img_width = 640;
@@ -509,30 +519,70 @@ static void run_slam_loop(
         }
     }
 
-    /* Build stereo camera model. */
+    /* Build stereo camera model.
+     *
+     * OAK-D stereo depth outputs RECTIFIED images, so we provide
+     * full K/D/R/P matrices so RTAB-Map's isValidForRectification()
+     * is satisfied.
+     *
+     * IMPORTANT: getCameraIntrinsics() returns values for the native
+     * sensor resolution unless you pass the target width/height.
+     * We must pass img_width/img_height to get correctly scaled
+     * fx/fy/cx/cy for the actual output resolution.
+     */
+    auto intrinsics_left = calib.getCameraIntrinsics(
+        dai::CameraBoardSocket::CAM_B, img_width, img_height);
+    auto intrinsics_right = calib.getCameraIntrinsics(
+        dai::CameraBoardSocket::CAM_C, img_width, img_height);
+
     double fx_l = intrinsics_left[0][0];
     double fy_l = intrinsics_left[1][1];
     double cx_l = intrinsics_left[0][2];
     double cy_l = intrinsics_left[1][2];
     double fx_r = intrinsics_right[0][0];
+    double fy_r = intrinsics_right[1][1];
     double cx_r = intrinsics_right[0][2];
+    double cy_r = intrinsics_right[1][2];
+
+    std::cerr << "[slam] Camera model @" << img_width << "x" << img_height
+              << ": L(fx=" << fx_l << " fy=" << fy_l
+              << " cx=" << cx_l << " cy=" << cy_l
+              << ") R(fx=" << fx_r << " fy=" << fy_r
+              << " cx=" << cx_r << " cy=" << cy_r
+              << ") baseline=" << baseline << "m" << std::endl;
+
+    cv::Mat K_left = (cv::Mat_<double>(3, 3) <<
+        fx_l, 0, cx_l,  0, fy_l, cy_l,  0, 0, 1);
+    cv::Mat D_left = cv::Mat::zeros(1, 5, CV_64F);
+    cv::Mat R_left = cv::Mat::eye(3, 3, CV_64F);
+    cv::Mat P_left = (cv::Mat_<double>(3, 4) <<
+        fx_l, 0, cx_l, 0,  0, fy_l, cy_l, 0,  0, 0, 1, 0);
+
+    cv::Mat K_right = (cv::Mat_<double>(3, 3) <<
+        fx_r, 0, cx_r,  0, fy_r, cy_r,  0, 0, 1);
+    cv::Mat D_right = cv::Mat::zeros(1, 5, CV_64F);
+    cv::Mat R_right = cv::Mat::eye(3, 3, CV_64F);
+    cv::Mat P_right = (cv::Mat_<double>(3, 4) <<
+        fx_r, 0, cx_r, -fx_r * baseline,
+        0, fy_r, cy_r, 0,
+        0, 0, 1, 0);
 
     rtabmap::CameraModel left_model(
-        fx_l, fy_l, cx_l, cy_l,
-        rtabmap::Transform::getIdentity(),
-        0, cv::Size(img_width, img_height));
+        "oakd_left", cv::Size(img_width, img_height),
+        K_left, D_left, R_left, P_left,
+        rtabmap::Transform::getIdentity());
 
     rtabmap::CameraModel right_model(
-        fx_r, fy_l, cx_r, cy_l,
-        rtabmap::Transform::getIdentity(),
-        0, cv::Size(img_width, img_height));
+        "oakd_right", cv::Size(img_width, img_height),
+        K_right, D_right, R_right, P_right,
+        rtabmap::Transform::getIdentity());
 
     rtabmap::StereoCameraModel stereo_model(
-        "oakd", left_model, right_model,
-        rtabmap::Transform(
-            1, 0, 0, baseline,
-            0, 1, 0, 0,
-            0, 0, 1, 0));
+        "oakd", left_model, right_model);
+
+    std::cerr << "[slam] Stereo model valid=" << stereo_model.isValidForProjection()
+              << " baseline=" << stereo_model.baseline() << "m"
+              << std::endl;
 
     std::cerr << "[slam] Entering main loop (pose_rate="
               << cfg.pose_output_rate_hz << " Hz)" << std::endl;
@@ -626,13 +676,13 @@ static void run_slam_loop(
         memset(&msg, 0, sizeof(msg));
 
         uint8_t confidence = 0;
-        if (odom_info.inliers > 0) {
+        if (odom_info.reg.inliers > 0) {
             confidence = static_cast<uint8_t>(
-                std::min(100, odom_info.inliers));
+                std::min(100, odom_info.reg.inliers));
         }
 
         transform_to_pose_msg(
-            pose, odom_info.covariance,
+            pose, odom_info.reg.covariance,
             confidence, engine.reset_counter, msg);
 
         /* Send over socket. */
@@ -727,6 +777,8 @@ int main(int argc, char *argv[]) {
     std::cerr << "[main] Shutting down..." << std::endl;
     sd_notify(0, "STOPPING=1");
 
+    dai.pipeline->stop();
+    dai.pipeline->wait();
     destroy_slam_engine(engine);
     socket_server_close(srv);
 

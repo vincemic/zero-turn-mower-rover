@@ -64,8 +64,13 @@ struct __attribute__((packed)) vslam_pose_msg {
 };
 
 /* Compile-time size check. */
+#ifdef __cplusplus
+static_assert(sizeof(struct vslam_pose_msg) == 118,
+              "vslam_pose_msg must be exactly 118 bytes");
+#else
 _Static_assert(sizeof(struct vslam_pose_msg) == 118,
                "vslam_pose_msg must be exactly 118 bytes");
+#endif
 
 #ifdef __cplusplus
 }

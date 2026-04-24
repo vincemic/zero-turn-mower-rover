@@ -110,19 +110,20 @@ def _send_vision_position(
 ) -> None:
     """Send VISION_POSITION_ESTIMATE (msg_id 102)."""
     x, y, z, roll, pitch, yaw = ned
-    # Covariance: MAVLink expects row-major upper-right triangle as a flat
-    # array.  Our IPC sends the same layout — pass through.
-    conn.mav.vision_position_estimate_send(  # type: ignore[attr-defined]
-        usec=msg.timestamp_us,
-        x=x,
-        y=y,
-        z=z,
-        roll=roll,
-        pitch=pitch,
-        yaw=yaw,
-        covariance=list(msg.covariance),
-        reset_counter=reset_counter,
+    kwargs: dict[str, object] = dict(
+        usec=msg.timestamp_us, x=x, y=y, z=z,
+        roll=roll, pitch=pitch, yaw=yaw,
     )
+    # covariance & reset_counter are MAVLink extension fields —
+    # only present in newer pymavlink builds.
+    import inspect
+
+    sig = inspect.signature(conn.mav.vision_position_estimate_send)  # type: ignore[attr-defined]
+    if "covariance" in sig.parameters:
+        kwargs["covariance"] = list(msg.covariance)
+    if "reset_counter" in sig.parameters:
+        kwargs["reset_counter"] = reset_counter
+    conn.mav.vision_position_estimate_send(**kwargs)  # type: ignore[attr-defined]
 
 
 def _send_vision_speed(
@@ -133,14 +134,15 @@ def _send_vision_speed(
 ) -> None:
     """Send VISION_SPEED_ESTIMATE (msg_id 103)."""
     vx, vy, vz = ned_vel
-    conn.mav.vision_speed_estimate_send(  # type: ignore[attr-defined]
-        usec=timestamp_us,
-        x=vx,
-        y=vy,
-        z=vz,
-        covariance=[0.0] * 9,  # 3×3 identity-ish — placeholder until covariance propagation
-        reset_counter=reset_counter,
-    )
+    kwargs: dict[str, object] = dict(usec=timestamp_us, x=vx, y=vy, z=vz)
+    import inspect
+
+    sig = inspect.signature(conn.mav.vision_speed_estimate_send)  # type: ignore[attr-defined]
+    if "covariance" in sig.parameters:
+        kwargs["covariance"] = [0.0] * 9
+    if "reset_counter" in sig.parameters:
+        kwargs["reset_counter"] = reset_counter
+    conn.mav.vision_speed_estimate_send(**kwargs)  # type: ignore[attr-defined]
 
 
 def _differentiate_velocity(

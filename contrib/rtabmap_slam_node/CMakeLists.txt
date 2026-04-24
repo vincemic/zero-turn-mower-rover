@@ -33,9 +33,9 @@ target_include_directories(rtabmap_slam_node PRIVATE
 )
 
 target_link_libraries(rtabmap_slam_node PRIVATE
-    RTABMap::core
-    RTABMap::utilite
-    depthai::opencv
+    rtabmap::core
+    rtabmap::utilite
+    depthai::core
     ${OpenCV_LIBS}
     ${SYSTEMD_LIBRARIES}
     ${YAMLCPP_LIBRARIES}
