@@ -31,3 +31,15 @@ def check_oakd(sysroot: Path) -> tuple[bool, str]:
                 return True, f"OAK device found at USB {speed} Mbps"
             return False, f"OAK device at USB {speed} Mbps (need \u2265{_MIN_USB_SPEED_MBPS})"
     return False, "No OAK device detected"
+
+
+_VSLAM_CONFIG_PATH = "etc/mower/vslam.yaml"
+
+
+@register("oakd_vslam_config", severity=Severity.WARNING, depends_on=("oakd",))
+def check_oakd_vslam_config(sysroot: Path) -> tuple[bool, str]:
+    """Verify VSLAM extrinsic config file exists at /etc/mower/vslam.yaml."""
+    cfg_path = sysroot / _VSLAM_CONFIG_PATH
+    if cfg_path.is_file():
+        return True, f"VSLAM config present: {cfg_path}"
+    return False, f"VSLAM config missing: {cfg_path}"

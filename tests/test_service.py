@@ -21,9 +21,14 @@ from mower_rover.config.jetson import (
 from mower_rover.safety.confirm import SafetyContext
 from mower_rover.service.unit import (
     UNIT_NAME,
+    VSLAM_UNIT_NAME,
+    generate_service_unit,
     generate_unit_file,
+    generate_vslam_unit_file,
     install_service,
+    install_vslam_service,
     uninstall_service,
+    uninstall_vslam_service,
     unit_dir,
 )
 
@@ -240,6 +245,226 @@ class TestUninstallService:
         ):
             # Should not raise despite stop/disable failing.
             uninstall_service(ctx, user_level=True)
+
+
+# ---------------------------------------------------------------------------
+# generate_service_unit (generic)
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateServiceUnit:
+    def test_user_level_has_default_target(self) -> None:
+        content = generate_service_unit(
+            description="Test service",
+            exec_start="/usr/bin/test-svc",
+            user="tester",
+            home_dir="/home/tester",
+            user_level=True,
+        )
+        assert "WantedBy=default.target" in content
+        assert "User=" not in content
+
+    def test_system_level_has_multi_user_target(self) -> None:
+        content = generate_service_unit(
+            description="Test service",
+            exec_start="/usr/bin/test-svc",
+            user="tester",
+            home_dir="/home/tester",
+            user_level=False,
+        )
+        assert "WantedBy=multi-user.target" in content
+        assert "User=tester" in content
+
+    def test_custom_after(self) -> None:
+        content = generate_service_unit(
+            description="Test",
+            exec_start="/usr/bin/test",
+            user="u",
+            home_dir="/home/u",
+            after="network.target foo.service",
+        )
+        assert "After=network.target foo.service" in content
+
+    def test_binds_to(self) -> None:
+        content = generate_service_unit(
+            description="Test",
+            exec_start="/usr/bin/test",
+            user="u",
+            home_dir="/home/u",
+            binds_to="other.service",
+        )
+        assert "BindsTo=other.service" in content
+
+    def test_no_binds_to_by_default(self) -> None:
+        content = generate_service_unit(
+            description="Test",
+            exec_start="/usr/bin/test",
+            user="u",
+            home_dir="/home/u",
+        )
+        assert "BindsTo" not in content
+
+    def test_watchdog_sec_custom(self) -> None:
+        content = generate_service_unit(
+            description="Test",
+            exec_start="/usr/bin/test",
+            user="u",
+            home_dir="/home/u",
+            watchdog_sec=60,
+        )
+        assert "WatchdogSec=60" in content
+
+
+# ---------------------------------------------------------------------------
+# generate_vslam_unit_file
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateVslamUnitFile:
+    def test_contains_rtabmap_exec(self) -> None:
+        content = generate_vslam_unit_file(
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "rtabmap_slam_node --config /etc/mower/vslam.yaml" in content
+
+    def test_custom_binary_and_config(self) -> None:
+        content = generate_vslam_unit_file(
+            user="mower",
+            home_dir="/home/mower",
+            config_path="/opt/vslam.yaml",
+            node_binary="/opt/bin/slam_node",
+        )
+        assert "ExecStart=/opt/bin/slam_node --config /opt/vslam.yaml" in content
+
+    def test_after_health_service(self) -> None:
+        content = generate_vslam_unit_file(
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "After=network.target mower-health.service" in content
+
+    def test_type_notify(self) -> None:
+        content = generate_vslam_unit_file(
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "Type=notify" in content
+
+    def test_watchdog_sec(self) -> None:
+        content = generate_vslam_unit_file(
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "WatchdogSec=30" in content
+
+    def test_description(self) -> None:
+        content = generate_vslam_unit_file(
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "Mower Rover VSLAM" in content
+
+    def test_user_level_omits_user(self) -> None:
+        content = generate_vslam_unit_file(
+            user="mower",
+            home_dir="/home/mower",
+            user_level=True,
+        )
+        assert "User=" not in content
+
+    def test_system_level_includes_user(self) -> None:
+        content = generate_vslam_unit_file(
+            user="mower",
+            home_dir="/home/mower",
+            user_level=False,
+        )
+        assert "User=mower" in content
+
+
+# ---------------------------------------------------------------------------
+# install_vslam_service
+# ---------------------------------------------------------------------------
+
+
+class TestInstallVslamService:
+    def test_dry_run_skips_write(self) -> None:
+        ctx = SafetyContext(dry_run=True, assume_yes=True)
+        with patch("mower_rover.service.unit.subprocess.run") as mock_run:
+            install_vslam_service(ctx, user_level=True)
+        mock_run.assert_not_called()
+
+    def test_install_writes_unit_and_reloads(self, tmp_path: Path) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_dir = tmp_path / "systemd" / "user"
+
+        with (
+            patch("mower_rover.service.unit.unit_dir", return_value=fake_dir),
+            patch("mower_rover.service.unit.getpass.getuser", return_value="testuser"),
+            patch("mower_rover.service.unit.Path.home", return_value=tmp_path),
+            patch("mower_rover.service.unit.subprocess.run") as mock_run,
+        ):
+            install_vslam_service(ctx, user_level=True)
+
+        unit_path = fake_dir / f"{VSLAM_UNIT_NAME}.service"
+        assert unit_path.exists()
+        content = unit_path.read_text(encoding="utf-8")
+        assert "rtabmap_slam_node" in content
+        assert "WatchdogSec=30" in content
+        assert "User=" not in content
+
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        assert "daemon-reload" in args
+
+
+# ---------------------------------------------------------------------------
+# uninstall_vslam_service
+# ---------------------------------------------------------------------------
+
+
+class TestUninstallVslamService:
+    def test_dry_run_skips_all(self) -> None:
+        ctx = SafetyContext(dry_run=True, assume_yes=True)
+        with patch("mower_rover.service.unit.subprocess.run") as mock_run:
+            uninstall_vslam_service(ctx, user_level=True)
+        mock_run.assert_not_called()
+
+    def test_uninstall_stops_disables_removes_reloads(self, tmp_path: Path) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_dir = tmp_path / "systemd" / "user"
+        fake_dir.mkdir(parents=True)
+        unit_path = fake_dir / f"{VSLAM_UNIT_NAME}.service"
+        unit_path.write_text("[Unit]\n", encoding="utf-8")
+
+        with (
+            patch("mower_rover.service.unit.unit_dir", return_value=fake_dir),
+            patch("mower_rover.service.unit.subprocess.run") as mock_run,
+        ):
+            uninstall_vslam_service(ctx, user_level=True)
+
+        assert not unit_path.exists()
+        assert mock_run.call_count == 3
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert any("stop" in c for c in calls)
+        assert any("disable" in c for c in calls)
+        assert any("daemon-reload" in c for c in calls)
+
+    def test_uninstall_tolerates_not_active(self, tmp_path: Path) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_dir = tmp_path / "systemd" / "user"
+        fake_dir.mkdir(parents=True)
+
+        def side_effect(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            if "stop" in cmd or "disable" in cmd:
+                raise subprocess.CalledProcessError(1, cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with (
+            patch("mower_rover.service.unit.unit_dir", return_value=fake_dir),
+            patch("mower_rover.service.unit.subprocess.run", side_effect=side_effect),
+        ):
+            uninstall_vslam_service(ctx, user_level=True)
 
 
 # ---------------------------------------------------------------------------

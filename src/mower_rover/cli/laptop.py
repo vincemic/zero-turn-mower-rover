@@ -8,6 +8,7 @@ from mower_rover import __version__
 from mower_rover.cli.detect import detect_command
 from mower_rover.cli.jetson_remote import app as jetson_remote_app
 from mower_rover.cli.params import app as params_app
+from mower_rover.cli.vslam_laptop import app as vslam_app
 from mower_rover.logging_setup.setup import configure_logging, get_logger
 
 app = typer.Typer(
@@ -43,6 +44,7 @@ def _root(
 app.command("detect")(detect_command)
 app.add_typer(params_app, name="params")
 app.add_typer(jetson_remote_app, name="jetson")
+app.add_typer(vslam_app, name="vslam")
 
 
 @app.command("version")

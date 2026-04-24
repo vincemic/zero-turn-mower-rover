@@ -186,7 +186,7 @@ Organized into releases (MVP → final form). Each release contains dependency-o
 |---------|-------|--------|----------|--------|----------|
 | Release 1 (MVP) | Bring-up + RTK-only autonomous mowing | 9 | 10 | ✅ Research Complete | [001-mvp-bringup-rtk-mowing.md](/docs/research/001-mvp-bringup-rtk-mowing.md) |
 | Release 2 | Operations & iteration quality | 2 | 3 | ✅ Research Complete | [004-operations-iteration-quality.md](/docs/research/004-operations-iteration-quality.md) |
-| Release 3 (Final) | VSLAM-augmented positioning | 2 | 2 | ⏳ Not Started | — |
+| Release 3 (Final) | VSLAM-augmented positioning | 2 | 2 | ✅ Research Complete | [007-vslam-ardupilot-rtk-integration.md](/docs/research/007-vslam-ardupilot-rtk-integration.md) |
 
 ---
 
@@ -196,10 +196,10 @@ Organized into releases (MVP → final form). Each release contains dependency-o
 
 | Phase | Name | Category | Status | Depends On |
 |-------|------|----------|--------|------------|
-| 1 | Project foundation | infrastructure | ⏳ Not Started | — |
-| 2 | MAVLink connection layer + hardware detection | infrastructure | ⏳ Not Started | 1 |
-| 3 | Jetson side base + cross-side transport | infrastructure | ⏳ Not Started | 1 |
-| 4 | ArduPilot baseline params + config snapshot | business-logic | ⏳ Not Started | 1, 2 |
+| 1 | Project foundation | infrastructure | ✅ Complete | — |
+| 2 | MAVLink connection layer + hardware detection | infrastructure | ✅ Complete | 1 |
+| 3 | Jetson side base + cross-side transport | infrastructure | ✅ Complete | 1 |
+| 4 | ArduPilot baseline params + config snapshot | business-logic | 🔄 In Progress | 1, 2 |
 | 5 | RTK GPS configure & verify | integration | ⏳ Not Started | 2, 4 |
 | 6 | Servo calibration | business-logic | ⏳ Not Started | 2, 4 |
 | 7 | Guided ArduPilot tuning | business-logic | ⏳ Not Started | 2, 4, 5, 6 |
@@ -208,7 +208,7 @@ Organized into releases (MVP → final form). Each release contains dependency-o
 
 #### Phase 1: Project foundation
 
-**Release:** 1 (MVP) **Status:** ⏳ Not Started **Category:** infrastructure
+**Release:** 1 (MVP) **Status:** ✅ Complete **Category:** infrastructure
 **Foundational Components Delivered:** Python project skeleton, structured logging, config & snapshot library (primitives only), safety primitive, SITL test harness
 
 **Scope:**
@@ -229,7 +229,7 @@ Organized into releases (MVP → final form). Each release contains dependency-o
 
 #### Phase 2: MAVLink connection layer + hardware detection
 
-**Release:** 1 (MVP) **Status:** ⏳ Not Started **Category:** infrastructure + data
+**Release:** 1 (MVP) **Status:** ✅ Complete **Category:** infrastructure + data
 **Foundational Components Delivered:** MAVLink connection layer
 **Requirements:** FR-1, FR-16 **Depends On:** Phase 1
 
@@ -253,7 +253,7 @@ Organized into releases (MVP → final form). Each release contains dependency-o
 
 #### Phase 3: Jetson side base + cross-side transport
 
-**Release:** 1 (MVP) **Status:** ⏳ Not Started **Category:** infrastructure
+**Release:** 1 (MVP) **Status:** ✅ Complete **Category:** infrastructure
 **Foundational Components Delivered:** Jetson side base, cross-side transport
 **Depends On:** Phase 1
 
@@ -272,7 +272,7 @@ Organized into releases (MVP → final form). Each release contains dependency-o
 
 #### Phase 4: ArduPilot baseline params + config snapshot
 
-**Release:** 1 (MVP) **Status:** ⏳ Not Started **Category:** business-logic
+**Release:** 1 (MVP) **Status:** 🔄 In Progress **Category:** business-logic
 **Requirements:** FR-2, FR-12 **Depends On:** Phases 1, 2
 
 **Scope:**

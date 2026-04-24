@@ -1,0 +1,26 @@
+# Default VSLAM configuration for RTAB-Map + pymavlink bridge.
+# Installed to /etc/mower/vslam.yaml on the Jetson AGX Orin.
+# See docs/research/007-vslam-ardupilot-rtk-integration.md for details.
+
+vslam:
+  odometry_strategy: f2m        # Frame-to-Map (most robust for outdoor)
+  stereo_resolution: 400p       # OAK-D Pro stereo pair resolution
+  stereo_fps: 30                # Stereo frame rate
+  imu_rate_hz: 200              # OAK-D Pro IMU sample rate
+  pose_output_rate_hz: 20       # Pose output rate to bridge via socket
+  memory_threshold_mb: 6000     # Long-Term Memory transfer threshold (RAM)
+  loop_closure: true            # Enable appearance-based loop closure
+  database_path: /var/lib/mower/rtabmap.db   # Session map storage
+  socket_path: /run/mower/vslam-pose.sock    # IPC Unix domain socket
+  extrinsics:
+    pos_x: 0.30    # Camera forward offset from Pixhawk (m) — field measured
+    pos_y: 0.00    # Camera lateral offset (m)
+    pos_z: -0.20   # Camera vertical offset (m, NED: negative = above)
+    roll: 0.0       # Roll offset (degrees)
+    pitch: -15.0    # Downward tilt (degrees)
+    yaw: 0.0        # Yaw offset (degrees)
+
+bridge:
+  serial_device: /dev/ttyACM0   # Pixhawk USB (SERIAL0) — auto-enumerated
+  source_system: 1              # MAVLink system ID (same as autopilot)
+  source_component: 197         # MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY

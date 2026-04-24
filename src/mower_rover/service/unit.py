@@ -1,7 +1,7 @@
-"""Systemd unit file generation and management for the mower-health service.
+"""Systemd unit file generation and management for mower services.
 
-Generates, installs, and removes the ``mower-health.service`` unit that
-runs health monitoring on the Jetson.  Supports both per-user (``--user``)
+Generates, installs, and removes systemd service units (``mower-health``,
+``mower-vslam``, etc.) on the Jetson.  Supports both per-user (``--user``)
 and system-level installation.
 """
 
@@ -19,21 +19,27 @@ from mower_rover.safety.confirm import SafetyContext, requires_confirmation
 _log = get_logger("service.unit")
 
 UNIT_NAME = "mower-health"
+VSLAM_UNIT_NAME = "mower-vslam"
+VSLAM_BRIDGE_UNIT_NAME = "mower-vslam-bridge"
 
-_UNIT_TEMPLATE_SYSTEM = """\
+# ---------------------------------------------------------------------------
+# Generic unit templates
+# ---------------------------------------------------------------------------
+
+_GENERIC_SYSTEM_TEMPLATE = """\
 [Unit]
-Description=Mower Rover health monitor daemon
-After=network.target
+Description={description}
+After={after}
 StartLimitIntervalSec=300
 StartLimitBurst=5
-
+{binds_to}
 [Service]
 Type=notify
 ExecStart={exec_start}
 Environment=MOWER_CORRELATION_ID=daemon
 User={user}
 WorkingDirectory={home_dir}
-WatchdogSec=30
+WatchdogSec={watchdog_sec}
 Restart=on-failure
 RestartSec=5
 
@@ -41,25 +47,53 @@ RestartSec=5
 WantedBy=multi-user.target
 """
 
-_UNIT_TEMPLATE_USER = """\
+_GENERIC_USER_TEMPLATE = """\
 [Unit]
-Description=Mower Rover health monitor daemon
-After=network.target
+Description={description}
+After={after}
 StartLimitIntervalSec=300
 StartLimitBurst=5
-
+{binds_to}
 [Service]
 Type=notify
 ExecStart={exec_start}
 Environment=MOWER_CORRELATION_ID=daemon
 WorkingDirectory={home_dir}
-WatchdogSec=30
+WatchdogSec={watchdog_sec}
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=default.target
 """
+
+
+def generate_service_unit(
+    *,
+    description: str,
+    exec_start: str,
+    user: str,
+    home_dir: str,
+    user_level: bool = True,
+    after: str = "network.target",
+    binds_to: str | None = None,
+    watchdog_sec: int = 30,
+) -> str:
+    """Return a systemd unit file from the generic template.
+
+    This is the building block for all mower service units.
+    """
+    binds_to_line = f"BindsTo={binds_to}\n" if binds_to else ""
+    template = _GENERIC_USER_TEMPLATE if user_level else _GENERIC_SYSTEM_TEMPLATE
+    return template.format(
+        description=description,
+        exec_start=exec_start,
+        user=user,
+        home_dir=home_dir,
+        after=after,
+        binds_to=binds_to_line,
+        watchdog_sec=watchdog_sec,
+    )
 
 
 def generate_unit_file(
@@ -74,11 +108,36 @@ def generate_unit_file(
     exec_start = (
         f"{mower_jetson_path} service run --health-interval {health_interval_s}"
     )
-    template = _UNIT_TEMPLATE_USER if user_level else _UNIT_TEMPLATE_SYSTEM
-    return template.format(
+    return generate_service_unit(
+        description="Mower Rover health monitor daemon",
         exec_start=exec_start,
         user=user,
         home_dir=home_dir,
+        user_level=user_level,
+        after="network.target",
+        watchdog_sec=30,
+    )
+
+
+def generate_vslam_unit_file(
+    *,
+    user: str,
+    home_dir: str,
+    config_path: str = "/etc/mower/vslam.yaml",
+    node_binary: str = "/usr/local/bin/rtabmap_slam_node",
+    user_level: bool = True,
+) -> str:
+    """Return the content of a systemd unit file for the mower-vslam daemon."""
+    exec_start = f"{node_binary} --config {config_path}"
+    return generate_service_unit(
+        description="Mower Rover VSLAM (RTAB-Map) daemon",
+        exec_start=exec_start,
+        user=user,
+        home_dir=home_dir,
+        user_level=user_level,
+        after="network.target mower-health.service",
+        binds_to=None,
+        watchdog_sec=30,
     )
 
 
@@ -162,3 +221,154 @@ def uninstall_service(ctx: SafetyContext, *, user_level: bool) -> None:
 
     _systemctl(["daemon-reload"], user_level=user_level)
     log.info("service_uninstalled")
+
+
+# ---------------------------------------------------------------------------
+# VSLAM service install / uninstall
+# ---------------------------------------------------------------------------
+
+
+@requires_confirmation("Install mower-vslam systemd service")
+def install_vslam_service(ctx: SafetyContext, *, user_level: bool) -> None:
+    """Write the mower-vslam unit file and reload systemd."""
+    log = _log.bind(op="install_vslam_service", user_level=user_level)
+
+    if ctx.dry_run:
+        log.info("dry_run_install_vslam_service")
+        return
+
+    user = getpass.getuser()
+    home = str(Path.home())
+
+    content = generate_vslam_unit_file(
+        user=user,
+        home_dir=home,
+        user_level=user_level,
+    )
+
+    target_dir = unit_dir(user_level)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    unit_path = target_dir / f"{VSLAM_UNIT_NAME}.service"
+    unit_path.write_text(content, encoding="utf-8")
+
+    _systemctl(["daemon-reload"], user_level=user_level)
+    log.info("vslam_service_installed", path=str(unit_path))
+
+
+@requires_confirmation("Uninstall mower-vslam systemd service")
+def uninstall_vslam_service(ctx: SafetyContext, *, user_level: bool) -> None:
+    """Stop, disable, and remove the mower-vslam unit file, then reload systemd."""
+    log = _log.bind(op="uninstall_vslam_service", user_level=user_level)
+
+    if ctx.dry_run:
+        log.info("dry_run_uninstall_vslam_service")
+        return
+
+    for action in ("stop", "disable"):
+        try:
+            _systemctl(
+                [action, f"{VSLAM_UNIT_NAME}.service"], user_level=user_level
+            )
+        except subprocess.CalledProcessError:
+            log.debug(
+                "systemctl_action_skipped",
+                action=action,
+                detail="vslam service may not be active/enabled",
+            )
+
+    target = unit_dir(user_level) / f"{VSLAM_UNIT_NAME}.service"
+    if target.exists():
+        target.unlink()
+        log.info("vslam_unit_file_removed", path=str(target))
+
+    _systemctl(["daemon-reload"], user_level=user_level)
+    log.info("vslam_service_uninstalled")
+
+
+# ---------------------------------------------------------------------------
+# VSLAM bridge service install / uninstall
+# ---------------------------------------------------------------------------
+
+
+def generate_vslam_bridge_unit_file(
+    *,
+    mower_jetson_path: str,
+    user: str,
+    home_dir: str,
+    user_level: bool = True,
+) -> str:
+    """Return the content of a systemd unit file for the mower-vslam-bridge daemon."""
+    exec_start = f"{mower_jetson_path} vslam bridge-run"
+    return generate_service_unit(
+        description="Mower Rover VSLAM MAVLink bridge daemon",
+        exec_start=exec_start,
+        user=user,
+        home_dir=home_dir,
+        user_level=user_level,
+        after=f"network.target {VSLAM_UNIT_NAME}.service",
+        binds_to="dev-ttyACM0.device",
+        watchdog_sec=30,
+    )
+
+
+@requires_confirmation("Install mower-vslam-bridge systemd service")
+def install_vslam_bridge_service(ctx: SafetyContext, *, user_level: bool) -> None:
+    """Write the mower-vslam-bridge unit file and reload systemd."""
+    log = _log.bind(op="install_vslam_bridge_service", user_level=user_level)
+
+    if ctx.dry_run:
+        log.info("dry_run_install_vslam_bridge_service")
+        return
+
+    mower_jetson = (
+        shutil.which("mower-jetson")
+        or str(Path.home() / ".local" / "bin" / "mower-jetson")
+    )
+    user = getpass.getuser()
+    home = str(Path.home())
+
+    content = generate_vslam_bridge_unit_file(
+        mower_jetson_path=mower_jetson,
+        user=user,
+        home_dir=home,
+        user_level=user_level,
+    )
+
+    target_dir = unit_dir(user_level)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    unit_path = target_dir / f"{VSLAM_BRIDGE_UNIT_NAME}.service"
+    unit_path.write_text(content, encoding="utf-8")
+
+    _systemctl(["daemon-reload"], user_level=user_level)
+    log.info("vslam_bridge_service_installed", path=str(unit_path))
+
+
+@requires_confirmation("Uninstall mower-vslam-bridge systemd service")
+def uninstall_vslam_bridge_service(ctx: SafetyContext, *, user_level: bool) -> None:
+    """Stop, disable, and remove the mower-vslam-bridge unit file, then reload systemd."""
+    log = _log.bind(op="uninstall_vslam_bridge_service", user_level=user_level)
+
+    if ctx.dry_run:
+        log.info("dry_run_uninstall_vslam_bridge_service")
+        return
+
+    for action in ("stop", "disable"):
+        try:
+            _systemctl(
+                [action, f"{VSLAM_BRIDGE_UNIT_NAME}.service"],
+                user_level=user_level,
+            )
+        except subprocess.CalledProcessError:
+            log.debug(
+                "systemctl_action_skipped",
+                action=action,
+                detail="vslam bridge service may not be active/enabled",
+            )
+
+    target = unit_dir(user_level) / f"{VSLAM_BRIDGE_UNIT_NAME}.service"
+    if target.exists():
+        target.unlink()
+        log.info("vslam_bridge_unit_file_removed", path=str(target))
+
+    _systemctl(["daemon-reload"], user_level=user_level)
+    log.info("vslam_bridge_service_uninstalled")

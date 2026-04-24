@@ -44,7 +44,17 @@ from mower_rover.logging_setup.setup import configure_logging, get_logger
 from mower_rover.probe.registry import Status, derive_exit_code, run_checks
 from mower_rover.safety.confirm import ConfirmationAborted, SafetyContext
 from mower_rover.service.daemon import run_daemon
-from mower_rover.service.unit import UNIT_NAME, install_service, uninstall_service
+from mower_rover.service.unit import (
+    UNIT_NAME,
+    VSLAM_BRIDGE_UNIT_NAME,
+    VSLAM_UNIT_NAME,
+    install_service,
+    install_vslam_bridge_service,
+    install_vslam_service,
+    uninstall_service,
+    uninstall_vslam_bridge_service,
+    uninstall_vslam_service,
+)
 
 app = typer.Typer(
     name="mower-jetson",
@@ -60,6 +70,13 @@ service_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(service_app, name="service")
+
+vslam_app = typer.Typer(
+    name="vslam",
+    help="Manage the mower-vslam (RTAB-Map) systemd service.",
+    no_args_is_help=True,
+)
+app.add_typer(vslam_app, name="vslam")
 
 
 @app.callback()
@@ -527,6 +544,167 @@ def service_run_command(
     cfg = load_jetson_config(config)
     interval = health_interval if health_interval is not None else cfg.health_interval_s
     run_daemon(health_interval_s=interval, sysroot=Path("/"))
+
+
+# --- vslam -------------------------------------------------------------------
+
+
+@vslam_app.command("install")
+def vslam_install_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Install the mower-vslam systemd service."""
+    obj = ctx.obj or {}
+    cfg = load_jetson_config()
+    level = user_level if user_level is not None else cfg.service_user_level
+    safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
+    try:
+        install_vslam_service(safety, user_level=level)
+    except ConfirmationAborted:
+        typer.echo("Aborted.", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@vslam_app.command("uninstall")
+def vslam_uninstall_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Uninstall the mower-vslam systemd service."""
+    obj = ctx.obj or {}
+    cfg = load_jetson_config()
+    level = user_level if user_level is not None else cfg.service_user_level
+    safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
+    try:
+        uninstall_vslam_service(safety, user_level=level)
+    except ConfirmationAborted:
+        typer.echo("Aborted.", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@vslam_app.command("start")
+def vslam_start_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+) -> None:
+    """Start the mower-vslam systemd service."""
+    cfg = load_jetson_config()
+    level = user_level if user_level is not None else cfg.service_user_level
+    cmd = ["systemctl"]
+    if level:
+        cmd.append("--user")
+    cmd.extend(["start", f"{VSLAM_UNIT_NAME}.service"])
+    subprocess.run(cmd, check=True)
+    typer.echo("VSLAM service started.")
+
+
+@vslam_app.command("stop")
+def vslam_stop_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+) -> None:
+    """Stop the mower-vslam systemd service."""
+    cfg = load_jetson_config()
+    level = user_level if user_level is not None else cfg.service_user_level
+    cmd = ["systemctl"]
+    if level:
+        cmd.append("--user")
+    cmd.extend(["stop", f"{VSLAM_UNIT_NAME}.service"])
+    subprocess.run(cmd, check=True)
+    typer.echo("VSLAM service stopped.")
+
+
+@vslam_app.command("status")
+def vslam_status_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+) -> None:
+    """Show the mower-vslam systemd service status."""
+    cfg = load_jetson_config()
+    level = user_level if user_level is not None else cfg.service_user_level
+    cmd = ["systemctl"]
+    if level:
+        cmd.append("--user")
+    cmd.extend(["status", f"{VSLAM_UNIT_NAME}.service"])
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    typer.echo(result.stdout)
+    if result.stderr:
+        typer.echo(result.stderr, err=True)
+    raise typer.Exit(code=result.returncode)
+
+
+# --- vslam bridge ------------------------------------------------------------
+
+
+@vslam_app.command("bridge-install")
+def vslam_bridge_install_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Install the mower-vslam-bridge systemd service."""
+    obj = ctx.obj or {}
+    cfg = load_jetson_config()
+    level = user_level if user_level is not None else cfg.service_user_level
+    safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
+    try:
+        install_vslam_bridge_service(safety, user_level=level)
+    except ConfirmationAborted:
+        typer.echo("Aborted.", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@vslam_app.command("bridge-uninstall")
+def vslam_bridge_uninstall_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Uninstall the mower-vslam-bridge systemd service."""
+    obj = ctx.obj or {}
+    cfg = load_jetson_config()
+    level = user_level if user_level is not None else cfg.service_user_level
+    safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
+    try:
+        uninstall_vslam_bridge_service(safety, user_level=level)
+    except ConfirmationAborted:
+        typer.echo("Aborted.", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@vslam_app.command("bridge-run")
+def vslam_bridge_run_command(
+    ctx: typer.Context,
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Override vslam.yaml path."
+    ),
+) -> None:
+    """Run the VSLAM MAVLink bridge daemon (foreground)."""
+    from mower_rover.vslam.bridge import run_bridge
+
+    run_bridge(config_path=str(config) if config else None)
+
+
+@vslam_app.command("bridge-health")
+def vslam_bridge_health_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+) -> None:
+    """Show mower-vslam-bridge systemd service status."""
+    cfg = load_jetson_config()
+    level = user_level if user_level is not None else cfg.service_user_level
+    cmd = ["systemctl"]
+    if level:
+        cmd.append("--user")
+    cmd.extend(["status", f"{VSLAM_BRIDGE_UNIT_NAME}.service"])
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    typer.echo(result.stdout)
+    if result.stderr:
+        typer.echo(result.stderr, err=True)
+    raise typer.Exit(code=result.returncode)
 
 
 if __name__ == "__main__":

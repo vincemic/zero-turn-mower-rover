@@ -1,0 +1,33 @@
+# Husqvarna Z254 — Release 3 VSLAM parameter delta.
+#
+# Applied ON TOP of the R1 baseline (z254_baseline.yaml) to enable
+# VSLAM-as-fallback via EKF3 Source Set 2 and the companion Lua script
+# (ahrs-source-gps-vslam.lua).
+#
+# Source: docs/research/007-vslam-ardupilot-rtk-integration.md
+#
+# SERIAL2 / USB params are NOT included — the USB CDC connection used by
+# the bridge operates on SERIAL0 defaults and needs no reconfiguration.
+
+# --- Source Set 2: VSLAM Fallback (degraded RTK) ---
+EK3_SRC2_POSXY: 6   # ExternalNav (VSLAM)
+EK3_SRC2_VELXY: 6   # ExternalNav (VSLAM)
+EK3_SRC2_POSZ:  1   # Baro (safer — VSLAM Z less reliable outdoors)
+EK3_SRC2_VELZ:  6   # ExternalNav (VSLAM)
+EK3_SRC2_YAW:   2   # GPS dual-antenna yaw (independent of position source)
+
+# --- Visual Odometry Config ---
+VISO_TYPE:      1    # MAVLink (receives VISION_POSITION_ESTIMATE)
+VISO_DELAY_MS:  50   # VSLAM processing latency compensation (ms)
+VISO_POS_X:     0.30 # Camera forward offset from Pixhawk (m) — field measured
+VISO_POS_Y:     0.00 # Camera lateral offset (m)
+VISO_POS_Z:    -0.20 # Camera vertical offset (m, NED negative=above)
+VISO_ORIENT:    0    # Camera facing forward
+
+# --- Source Options ---
+EK3_SRC_OPTIONS: 0   # Do NOT fuse all velocities (keep sources independent)
+
+# --- Lua Scripting ---
+SCR_ENABLE:     1    # Enable Lua scripts on Pixhawk
+SCR_USER2:      0.3  # GPS speed accuracy threshold (m/s)
+SCR_USER3:      0.3  # ExternalNav innovation threshold

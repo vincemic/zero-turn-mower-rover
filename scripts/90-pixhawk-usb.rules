@@ -1,0 +1,18 @@
+# 90-pixhawk-usb.rules — Stable device naming for Pixhawk Cube Orange USB
+# Deploy to /etc/udev/rules.d/90-pixhawk-usb.rules on the Jetson AGX Orin.
+# Reload: sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# The Cube Orange micro-USB port enumerates as a CDC ACM device
+# (/dev/ttyACM0). This rule creates a stable symlink /dev/pixhawk
+# so that if multiple ACM devices appear the bridge always finds
+# the flight controller. It also tags the device for systemd so
+# BindsTo=dev-pixhawk.device works for disconnect detection.
+#
+# CubePilot vendor ID: 0x2dae
+# Cube Orange product IDs: 0x1011 (bootloader), 0x1016 (MAVLink)
+
+# Create /dev/pixhawk symlink and tag for systemd
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2dae", SYMLINK+="pixhawk", MODE="0666", TAG+="systemd"
+
+# Disable USB autosuspend — the flight controller must stay awake
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2dae", ATTR{power/autosuspend}="-1"

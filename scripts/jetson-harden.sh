@@ -340,6 +340,127 @@ JCLOCKS
 }
 
 # ---------------------------------------------------------------------------
+# 13. RTAB-Map — build from source with CUDA/OpenCV
+# ---------------------------------------------------------------------------
+harden_rtabmap() {
+    local tag="v0.23.1"
+    local src_dir="/opt/rtabmap-src"
+
+    # Already installed?
+    if command -v rtabmap &>/dev/null && rtabmap --version 2>&1 | grep -q '0\.23'; then
+        STATUS[rtabmap]="already"
+        return
+    fi
+
+    # Build dependencies
+    apt-get update -qq
+    apt-get install -y --no-install-recommends \
+        cmake build-essential git \
+        libopencv-dev libsqlite3-dev libpcl-dev \
+        libboost-all-dev libeigen3-dev libsuitesparse-dev
+
+    # Clone (or re-use existing checkout)
+    if [[ -d "$src_dir/.git" ]]; then
+        echo "  Re-using existing RTAB-Map source at $src_dir"
+        cd "$src_dir" && git checkout "$tag" 2>/dev/null || true
+    else
+        rm -rf "$src_dir"
+        git clone --depth 1 --branch "$tag" \
+            https://github.com/introlab/rtabmap.git "$src_dir"
+    fi
+
+    mkdir -p "${src_dir}/build" && cd "${src_dir}/build"
+    cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DWITH_CUDA=ON \
+        -DWITH_QT=OFF \
+        -DWITH_PYTHON=OFF \
+        -DBUILD_EXAMPLES=OFF
+
+    make -j"$(nproc)"
+    make install
+    ldconfig
+
+    # Verify
+    if ! rtabmap --version 2>&1 | grep -q '0\.23'; then
+        echo "ERROR: RTAB-Map install verification failed" >&2
+        STATUS[rtabmap]="failed"
+        return 1
+    fi
+    STATUS[rtabmap]="applied"
+}
+
+# ---------------------------------------------------------------------------
+# 14. depthai-core C++ SDK — build from source
+# ---------------------------------------------------------------------------
+harden_depthai_core() {
+    local src_dir="/opt/depthai-core-src"
+    local marker="/usr/local/lib/libdepthai-core.so"
+
+    if [[ -f "$marker" ]]; then
+        STATUS[depthai_core]="already"
+        return
+    fi
+
+    apt-get install -y --no-install-recommends \
+        cmake build-essential git libusb-1.0-0-dev
+
+    if [[ -d "$src_dir/.git" ]]; then
+        echo "  Re-using existing depthai-core source at $src_dir"
+    else
+        rm -rf "$src_dir"
+        git clone --depth 1 --recursive \
+            https://github.com/luxonis/depthai-core.git "$src_dir"
+    fi
+
+    mkdir -p "${src_dir}/build" && cd "${src_dir}/build"
+    cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBUILD_SHARED_LIBS=ON
+
+    make -j"$(nproc)"
+    make install
+    ldconfig
+
+    if [[ ! -f "$marker" ]]; then
+        echo "ERROR: depthai-core install verification failed" >&2
+        STATUS[depthai_core]="failed"
+        return 1
+    fi
+    STATUS[depthai_core]="applied"
+}
+
+# ---------------------------------------------------------------------------
+# 15. RTAB-Map SLAM node — build custom C++ binary
+# ---------------------------------------------------------------------------
+harden_slam_node() {
+    local build_script
+    build_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../contrib/rtabmap_slam_node/build.sh"
+    local binary="/usr/local/bin/rtabmap_slam_node"
+
+    if [[ -f "$binary" ]]; then
+        STATUS[slam_node]="already"
+        return
+    fi
+
+    if [[ ! -f "$build_script" ]]; then
+        echo "  WARN: $build_script not found — skipping SLAM node build"
+        STATUS[slam_node]="skip:no_build_script"
+        return
+    fi
+
+    bash "$build_script"
+    if [[ ! -f "$binary" ]]; then
+        echo "ERROR: SLAM node build did not produce $binary" >&2
+        STATUS[slam_node]="failed"
+        return 1
+    fi
+    STATUS[slam_node]="applied"
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 print_summary() {
@@ -362,6 +483,9 @@ print_summary() {
         "oakd_udev:OAK-D udev rules (80-oakd-usb.rules)"
         "usb_params:USB kernel params (autosuspend, usbfs_memory_mb)"
         "jetson_clocks:jetson_clocks service (lock clocks at boot)"
+        "rtabmap:RTAB-Map 0.23.x (source build, CUDA+OpenCV)"
+        "depthai_core:depthai-core C++ SDK (source build)"
+        "slam_node:RTAB-Map SLAM node binary (custom C++)"
     )
     for entry in "${labels[@]}"; do
         local key="${entry%%:*}"
@@ -386,7 +510,7 @@ print_summary() {
 # Main
 # ---------------------------------------------------------------------------
 main() {
-    echo "jetson-harden.sh — Idempotent field-hardening for Jetson AGX Orin"
+    echo "jetson-harden.sh — Idempotent field-hardening for Jetson AGX Orin (15 steps)"
     echo ""
 
     if [[ "$(id -u)" -ne 0 ]]; then
@@ -394,41 +518,50 @@ main() {
         exit 1
     fi
 
-    echo "[1/12] Headless mode..."
+    echo "[1/15] Headless mode..."
     harden_headless
 
-    echo "[2/12] Disabling unnecessary services..."
+    echo "[2/15] Disabling unnecessary services..."
     harden_services
 
-    echo "[3/12] Filesystem tuning..."
+    echo "[3/15] Filesystem tuning..."
     harden_fstab
 
-    echo "[4/12] Log rotation & journald limits..."
+    echo "[4/15] Log rotation & journald limits..."
     harden_logrotate
 
-    echo "[5/12] OpenBLAS ARM fix..."
+    echo "[5/15] OpenBLAS ARM fix..."
     harden_openblas
 
-    echo "[6/12] nvpmodel (50W)..."
+    echo "[6/15] nvpmodel (50W)..."
     harden_nvpmodel
 
-    echo "[7/12] Hardware watchdog..."
+    echo "[7/15] Hardware watchdog..."
     harden_watchdog
 
-    echo "[8/12] apt-mark hold L4T packages..."
+    echo "[8/15] apt-mark hold L4T packages..."
     harden_apt_hold
 
-    echo "[9/12] SSH hardening..."
+    echo "[9/15] SSH hardening..."
     harden_ssh
 
-    echo "[10/12] OAK-D udev rules..."
+    echo "[10/15] OAK-D udev rules..."
     harden_oakd_udev
 
-    echo "[11/12] USB kernel params..."
+    echo "[11/15] USB kernel params..."
     harden_usb_params
 
-    echo "[12/12] jetson_clocks service..."
+    echo "[12/15] jetson_clocks service..."
     harden_jetson_clocks
+
+    echo "[13/15] RTAB-Map (source build)..."
+    harden_rtabmap
+
+    echo "[14/15] depthai-core C++ SDK (source build)..."
+    harden_depthai_core
+
+    echo "[15/15] RTAB-Map SLAM node binary..."
+    harden_slam_node
 
     print_summary
 }

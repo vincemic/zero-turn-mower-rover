@@ -29,6 +29,7 @@ class ConnectionConfig:
     endpoint: str = "udp:127.0.0.1:14550"
     baud: int = 57600
     source_system: int = 254
+    source_component: int = 0
     heartbeat_timeout_s: float = 10.0
     retry_attempts: int = 3
     retry_backoff_s: float = 1.0
@@ -54,6 +55,7 @@ def open_link(config: ConnectionConfig) -> Iterator[Any]:
                 config.endpoint,
                 baud=config.baud,
                 source_system=config.source_system,
+                source_component=config.source_component,
                 autoreconnect=True,
             )
             hb = conn.wait_heartbeat(timeout=config.heartbeat_timeout_s)
