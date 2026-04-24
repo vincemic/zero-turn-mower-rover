@@ -40,7 +40,7 @@ Environment=MOWER_CORRELATION_ID=daemon
 User={user}
 WorkingDirectory={home_dir}
 WatchdogSec={watchdog_sec}
-Restart=on-failure
+{runtime_directory}Restart=on-failure
 RestartSec=5
 
 [Install]
@@ -60,7 +60,7 @@ ExecStart={exec_start}
 Environment=MOWER_CORRELATION_ID=daemon
 WorkingDirectory={home_dir}
 WatchdogSec={watchdog_sec}
-Restart=on-failure
+{runtime_directory}Restart=on-failure
 RestartSec=5
 
 [Install]
@@ -78,12 +78,16 @@ def generate_service_unit(
     after: str = "network.target",
     binds_to: str | None = None,
     watchdog_sec: int = 30,
+    runtime_directory: str | None = None,
 ) -> str:
     """Return a systemd unit file from the generic template.
 
     This is the building block for all mower service units.
     """
     binds_to_line = f"BindsTo={binds_to}\n" if binds_to else ""
+    runtime_dir_line = (
+        f"RuntimeDirectory={runtime_directory}\n" if runtime_directory else ""
+    )
     template = _GENERIC_USER_TEMPLATE if user_level else _GENERIC_SYSTEM_TEMPLATE
     return template.format(
         description=description,
@@ -93,6 +97,7 @@ def generate_service_unit(
         after=after,
         binds_to=binds_to_line,
         watchdog_sec=watchdog_sec,
+        runtime_directory=runtime_dir_line,
     )
 
 
@@ -138,6 +143,7 @@ def generate_vslam_unit_file(
         after="network.target mower-health.service",
         binds_to=None,
         watchdog_sec=30,
+        runtime_directory="mower",
     )
 
 
@@ -306,8 +312,9 @@ def generate_vslam_bridge_unit_file(
         home_dir=home_dir,
         user_level=user_level,
         after=f"network.target {VSLAM_UNIT_NAME}.service",
-        binds_to="dev-ttyACM0.device",
+        binds_to="dev-pixhawk.device",
         watchdog_sec=30,
+        runtime_directory="mower",
     )
 
 

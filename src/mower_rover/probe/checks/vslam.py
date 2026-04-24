@@ -53,6 +53,20 @@ def _systemctl_is_active(service: str) -> tuple[bool, str]:
 
 
 # ------------------------------------------------------------------
+# Pixhawk symlink check (independent — no service dependency)
+# ------------------------------------------------------------------
+
+
+@register("pixhawk_symlink", severity=Severity.CRITICAL, depends_on=())
+def check_pixhawk_symlink(sysroot: Path) -> tuple[bool, str]:
+    """Check /dev/pixhawk symlink exists."""
+    dev_pixhawk = sysroot / "dev" / "pixhawk"
+    if dev_pixhawk.exists():
+        return True, f"/dev/pixhawk -> {dev_pixhawk.resolve()}"
+    return False, "/dev/pixhawk not found; deploy 90-pixhawk-usb.rules"
+
+
+# ------------------------------------------------------------------
 # Service checks (dependency chain: oakd → vslam_process → vslam_bridge)
 # ------------------------------------------------------------------
 

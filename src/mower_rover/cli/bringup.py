@@ -13,6 +13,7 @@ Runs on the **laptop** (Windows or Linux). Walks through:
 from __future__ import annotations
 
 import contextlib
+import importlib.resources
 import json as _json
 import subprocess
 import tempfile
@@ -27,7 +28,17 @@ from rich.table import Table
 from mower_rover.logging_setup.setup import get_logger
 from mower_rover.transport.ssh import JetsonClient, SshError
 
-STEP_NAMES = ("check-ssh", "harden", "install-uv", "install-cli", "verify", "service")
+STEP_NAMES = (
+    "check-ssh",
+    "harden",
+    "pixhawk-udev",
+    "install-uv",
+    "install-cli",
+    "verify",
+    "service",
+    "vslam-config",
+    "vslam-services",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +301,7 @@ def _run_install_cli(client: JetsonClient, bctx: BringupContext) -> None:
         result = client.run(
             [
                 f"~/.local/bin/uv tool install --python 3.11 --force"
-                f" --with sdnotify ~/{whl_name}",
+                f" ~/{whl_name}[jetson]",
             ],
             timeout=300,
         )
@@ -424,6 +435,222 @@ def _run_service(client: JetsonClient, bctx: BringupContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step: pixhawk-udev
+# ---------------------------------------------------------------------------
+
+
+def _pixhawk_udev_done(client: JetsonClient) -> bool:
+    try:
+        r1 = client.run(
+            ["test", "-f", "/etc/udev/rules.d/90-pixhawk-usb.rules"],
+            timeout=10,
+        )
+        r2 = client.run(["test", "-d", "/var/lib/mower"], timeout=10)
+        r3 = client.run(["test", "-d", "/etc/mower"], timeout=10)
+        return r1.ok and r2.ok and r3.ok
+    except SshError:
+        return False
+
+
+def _run_pixhawk_udev(client: JetsonClient, bctx: BringupContext) -> None:
+    if not _confirm_or_skip(
+        "Deploy Pixhawk udev rules and create runtime directories?", bctx,
+    ):
+        bctx.console.print("  Skipped by operator.")
+        return
+
+    rules_file = bctx.project_root / "scripts" / "90-pixhawk-usb.rules"
+    if not rules_file.exists():
+        bctx.console.print(f"  [red]Rules file not found:[/red] {rules_file}")
+        raise typer.Exit(code=3)
+
+    bctx.console.print("  Pushing 90-pixhawk-usb.rules…")
+    try:
+        client.push(rules_file, "~/90-pixhawk-usb.rules")
+    except SshError as exc:
+        bctx.console.print(f"  [red]Push failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+
+    bctx.console.print("  Installing udev rules…")
+    try:
+        result = client.run(
+            ["sudo cp ~/90-pixhawk-usb.rules /etc/udev/rules.d/"],
+            timeout=30,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]udev rules copy failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(
+            f"  [red]udev rules copy exited {result.returncode}:[/red]"
+        )
+        raise typer.Exit(code=3)
+
+    bctx.console.print("  Reloading udev…")
+    try:
+        result = client.run(
+            ["sudo udevadm control --reload-rules && sudo udevadm trigger"],
+            timeout=30,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]udev reload failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(
+            f"  [red]udev reload exited {result.returncode}:[/red]"
+        )
+        raise typer.Exit(code=3)
+
+    jetson_user = client.endpoint.user
+    bctx.console.print("  Creating runtime directories…")
+    try:
+        result = client.run(
+            [f"sudo mkdir -p /var/lib/mower /etc/mower"
+             f" && sudo chown {jetson_user}:{jetson_user} /var/lib/mower /etc/mower"
+             f" && mkdir -p /run/mower"],
+            timeout=30,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Directory creation failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(
+            f"  [red]Directory creation exited {result.returncode}:[/red]"
+        )
+        raise typer.Exit(code=3)
+
+    # Clean up temp file
+    with contextlib.suppress(SshError):
+        client.run(["rm", "-f", "~/90-pixhawk-usb.rules"], timeout=10)
+
+
+# ---------------------------------------------------------------------------
+# Step: vslam-config
+# ---------------------------------------------------------------------------
+
+
+def _vslam_config_exists(client: JetsonClient) -> bool:
+    try:
+        result = client.run(
+            ["test", "-f", "/etc/mower/vslam.yaml"],
+            timeout=10,
+        )
+        return result.ok
+    except SshError:
+        return False
+
+
+def _run_vslam_config(client: JetsonClient, bctx: BringupContext) -> None:
+    bctx.console.print("  Pushing default VSLAM configuration…")
+    ref = importlib.resources.files("mower_rover.config.data").joinpath(
+        "vslam_defaults.yaml",
+    )
+    with importlib.resources.as_file(ref) as defaults_path:
+        try:
+            client.push(defaults_path, "~/vslam.yaml")
+        except SshError as exc:
+            bctx.console.print(f"  [red]Push failed:[/red] {exc}")
+            raise typer.Exit(code=3) from exc
+
+    try:
+        result = client.run(
+            ["sudo cp ~/vslam.yaml /etc/mower/vslam.yaml"],
+            timeout=30,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Config copy failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(
+            f"  [red]Config copy exited {result.returncode}:[/red]"
+        )
+        raise typer.Exit(code=3)
+
+    # Clean up temp file
+    with contextlib.suppress(SshError):
+        client.run(["rm", "-f", "~/vslam.yaml"], timeout=10)
+
+
+# ---------------------------------------------------------------------------
+# Step: vslam-services
+# ---------------------------------------------------------------------------
+
+
+def _vslam_services_active(client: JetsonClient) -> bool:
+    try:
+        r1 = client.run(
+            ["systemctl", "--user", "is-active", "mower-vslam.service"],
+            timeout=10,
+        )
+        r2 = client.run(
+            ["systemctl", "--user", "is-active", "mower-vslam-bridge.service"],
+            timeout=10,
+        )
+        return r1.ok and r2.ok
+    except SshError:
+        return False
+
+
+def _run_vslam_services(client: JetsonClient, bctx: BringupContext) -> None:
+    if not _confirm_or_skip(
+        "Install and start VSLAM + bridge systemd services?", bctx,
+    ):
+        bctx.console.print("  Skipped by operator.")
+        return
+
+    bctx.console.print("  Installing mower-vslam service…")
+    try:
+        result = client.run(
+            ["~/.local/bin/mower-jetson vslam install --yes"],
+            timeout=120,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]VSLAM install failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(
+            f"  [red]VSLAM install exited {result.returncode}:[/red]"
+        )
+        if result.stderr:
+            bctx.console.print(result.stderr, style="dim", highlight=False)
+        raise typer.Exit(code=3)
+
+    bctx.console.print("  Installing mower-vslam-bridge service…")
+    try:
+        result = client.run(
+            ["~/.local/bin/mower-jetson vslam bridge-install --yes"],
+            timeout=120,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Bridge install failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(
+            f"  [red]Bridge install exited {result.returncode}:[/red]"
+        )
+        if result.stderr:
+            bctx.console.print(result.stderr, style="dim", highlight=False)
+        raise typer.Exit(code=3)
+
+    bctx.console.print("  Starting VSLAM services…")
+    try:
+        result = client.run(
+            ["systemctl --user start mower-vslam.service mower-vslam-bridge.service"],
+            timeout=60,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Service start failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(
+            f"  [red]Service start exited {result.returncode}:[/red]"
+        )
+        if result.stderr:
+            bctx.console.print(result.stderr, style="dim", highlight=False)
+        raise typer.Exit(code=3)
+
+
+# ---------------------------------------------------------------------------
 # Step table
 # ---------------------------------------------------------------------------
 
@@ -439,6 +666,13 @@ BRINGUP_STEPS: list[BringupStep] = [
         description="Field hardening",
         check=lambda c: _harden_done(c),
         execute=lambda c, b: _run_harden(c, b),
+        needs_confirm=True,
+    ),
+    BringupStep(
+        name="pixhawk-udev",
+        description="Pixhawk udev rules + runtime dirs",
+        check=lambda c: _pixhawk_udev_done(c),
+        execute=lambda c, b: _run_pixhawk_udev(c, b),
         needs_confirm=True,
     ),
     BringupStep(
@@ -464,6 +698,19 @@ BRINGUP_STEPS: list[BringupStep] = [
         description="mower-health.service",
         check=lambda c: _service_active(c),
         execute=lambda c, b: _run_service(c, b),
+        needs_confirm=True,
+    ),
+    BringupStep(
+        name="vslam-config",
+        description="Default VSLAM configuration",
+        check=lambda c: _vslam_config_exists(c),
+        execute=lambda c, b: _run_vslam_config(c, b),
+    ),
+    BringupStep(
+        name="vslam-services",
+        description="VSLAM + bridge systemd services",
+        check=lambda c: _vslam_services_active(c),
+        execute=lambda c, b: _run_vslam_services(c, b),
         needs_confirm=True,
     ),
 ]

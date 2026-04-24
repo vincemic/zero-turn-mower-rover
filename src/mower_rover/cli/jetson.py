@@ -32,6 +32,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from mower_rover import __version__
+from mower_rover.cli.detect import _collect, _render_human
 from mower_rover.config.jetson import (
     DEFAULT_JETSON_CONFIG_PATH,
     JetsonConfigError,
@@ -41,6 +42,7 @@ from mower_rover.health.disk import read_disk_usage
 from mower_rover.health.power import PowerState, read_power_state
 from mower_rover.health.thermal import ThermalSnapshot, read_thermal_zones
 from mower_rover.logging_setup.setup import configure_logging, get_logger
+from mower_rover.mavlink.connection import ConnectionConfig, open_link
 from mower_rover.probe.registry import Status, derive_exit_code, run_checks
 from mower_rover.safety.confirm import ConfirmationAborted, SafetyContext
 from mower_rover.service.daemon import run_daemon
@@ -108,6 +110,33 @@ def _root(
 def version() -> None:
     """Print the installed mower-rover version."""
     typer.echo(__version__)
+
+
+# --- detect ------------------------------------------------------------------
+
+
+@app.command("detect")
+def detect_command(
+    endpoint: str = typer.Option(
+        "/dev/pixhawk",
+        "--port",
+        "--endpoint",
+        help="MAVLink endpoint. Default: /dev/pixhawk (USB).",
+    ),
+    baud: int = typer.Option(0, help="Serial baud (0 for USB CDC)."),
+    sample_seconds: float = typer.Option(3.0, help="How long to listen for messages."),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Detect connected hardware over local USB."""
+    log = get_logger("cli-jetson").bind(op="detect")
+    config = ConnectionConfig(endpoint=endpoint, baud=baud)
+    with open_link(config) as conn:
+        report = _collect(conn, sample_window_s=sample_seconds)
+    log.info("detect_complete", endpoint=endpoint, warnings=report.warnings)
+    if json_out:
+        typer.echo(_json.dumps(asdict(report), indent=2))
+    else:
+        _render_human(report, Console())
 
 
 # --- info -------------------------------------------------------------------
@@ -705,6 +734,42 @@ def vslam_bridge_health_command(
     if result.stderr:
         typer.echo(result.stderr, err=True)
     raise typer.Exit(code=result.returncode)
+
+
+@vslam_app.command("bridge-start")
+def vslam_bridge_start_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+) -> None:
+    """Start the VSLAM bridge service."""
+    log = get_logger("cli-jetson").bind(op="bridge_start")
+    cfg = load_jetson_config()
+    level = user_level if user_level is not None else cfg.service_user_level
+    cmd = ["systemctl"]
+    if level:
+        cmd.append("--user")
+    cmd.extend(["start", f"{VSLAM_BRIDGE_UNIT_NAME}.service"])
+    log.info("bridge_start", cmd=cmd, user_level=level)
+    subprocess.run(cmd, check=True)
+    typer.echo("VSLAM bridge service started.")
+
+
+@vslam_app.command("bridge-stop")
+def vslam_bridge_stop_command(
+    ctx: typer.Context,
+    user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
+) -> None:
+    """Stop the VSLAM bridge service."""
+    log = get_logger("cli-jetson").bind(op="bridge_stop")
+    cfg = load_jetson_config()
+    level = user_level if user_level is not None else cfg.service_user_level
+    cmd = ["systemctl"]
+    if level:
+        cmd.append("--user")
+    cmd.extend(["stop", f"{VSLAM_BRIDGE_UNIT_NAME}.service"])
+    log.info("bridge_stop", cmd=cmd, user_level=level)
+    subprocess.run(cmd, check=True)
+    typer.echo("VSLAM bridge service stopped.")
 
 
 if __name__ == "__main__":

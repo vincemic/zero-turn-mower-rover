@@ -17,11 +17,17 @@ from mower_rover.cli.bringup import (
     _check_ssh_ok,
     _cli_installed,
     _harden_done,
+    _pixhawk_udev_done,
     _run_harden,
     _run_install_cli,
+    _run_pixhawk_udev,
+    _run_vslam_config,
+    _run_vslam_services,
     _service_active,
     _uv_installed,
     _verify_check,
+    _vslam_config_exists,
+    _vslam_services_active,
 )
 from mower_rover.cli.laptop import app as laptop_app
 from mower_rover.config.laptop import JetsonEndpoint
@@ -360,3 +366,249 @@ class TestRunHarden:
         # Neither push nor run should have been called
         mock_client.push.assert_not_called()
         mock_client.run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 4.5 — pixhawk-udev step
+# ---------------------------------------------------------------------------
+
+
+class TestPixhawkUdevDone:
+    def test_returns_true_when_all_exist(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = [
+            _ssh_ok(),  # test -f rules file
+            _ssh_ok(),  # test -d /var/lib/mower
+            _ssh_ok(),  # test -d /etc/mower
+        ]
+        assert _pixhawk_udev_done(mock_client) is True
+
+    def test_returns_false_when_rules_missing(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = [
+            _ssh_fail(),  # rules file missing
+            _ssh_ok(),
+            _ssh_ok(),
+        ]
+        assert _pixhawk_udev_done(mock_client) is False
+
+    def test_returns_false_when_var_lib_missing(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = [
+            _ssh_ok(),
+            _ssh_fail(),  # /var/lib/mower missing
+            _ssh_ok(),
+        ]
+        assert _pixhawk_udev_done(mock_client) is False
+
+    def test_returns_false_when_etc_mower_missing(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = [
+            _ssh_ok(),
+            _ssh_ok(),
+            _ssh_fail(),  # /etc/mower missing
+        ]
+        assert _pixhawk_udev_done(mock_client) is False
+
+    def test_returns_false_on_ssh_error(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = SshError("timeout")
+        assert _pixhawk_udev_done(mock_client) is False
+
+
+class TestRunPixhawkUdev:
+    def test_full_flow(self, mock_client: MagicMock, tmp_path: Path) -> None:
+        bctx = _bctx(tmp_path, yes=True)
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "90-pixhawk-usb.rules").write_text(
+            'SUBSYSTEM=="tty"', encoding="utf-8",
+        )
+
+        mock_client.push.return_value = _ssh_ok()
+        mock_client.run.side_effect = [
+            _ssh_ok(),  # sudo cp
+            _ssh_ok(),  # udevadm reload + trigger
+            _ssh_ok(),  # mkdir + chown
+            _ssh_ok(),  # rm cleanup
+        ]
+
+        _run_pixhawk_udev(mock_client, bctx)
+
+        mock_client.push.assert_called_once()
+        assert mock_client.run.call_count == 4
+        # Verify udev reload command
+        udev_cmd = mock_client.run.call_args_list[1][0][0]
+        assert "udevadm" in " ".join(udev_cmd)
+        # Verify mkdir command uses the endpoint username
+        mkdir_cmd = mock_client.run.call_args_list[2][0][0]
+        assert "mower" in " ".join(mkdir_cmd)
+
+    def test_rules_file_not_found_exits(self, mock_client: MagicMock, tmp_path: Path) -> None:
+        bctx = _bctx(tmp_path, yes=True)
+        # No scripts dir
+        with pytest.raises(ClickExit):
+            _run_pixhawk_udev(mock_client, bctx)
+
+    def test_push_failure_exits(self, mock_client: MagicMock, tmp_path: Path) -> None:
+        bctx = _bctx(tmp_path, yes=True)
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "90-pixhawk-usb.rules").write_text("rule", encoding="utf-8")
+
+        mock_client.push.side_effect = SshError("scp failed")
+
+        with pytest.raises(ClickExit):
+            _run_pixhawk_udev(mock_client, bctx)
+
+    def test_skipped_when_not_confirmed(self, mock_client: MagicMock, tmp_path: Path) -> None:
+        bctx = _bctx(tmp_path, yes=False)
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "90-pixhawk-usb.rules").write_text("rule", encoding="utf-8")
+
+        with patch("mower_rover.cli.bringup.input", return_value="n"):
+            _run_pixhawk_udev(mock_client, bctx)
+
+        mock_client.push.assert_not_called()
+        mock_client.run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 4.6 — vslam-config step
+# ---------------------------------------------------------------------------
+
+
+class TestVslamConfigExists:
+    def test_returns_true_when_file_exists(self, mock_client: MagicMock) -> None:
+        mock_client.run.return_value = _ssh_ok()
+        assert _vslam_config_exists(mock_client) is True
+
+    def test_returns_false_when_file_missing(self, mock_client: MagicMock) -> None:
+        mock_client.run.return_value = _ssh_fail()
+        assert _vslam_config_exists(mock_client) is False
+
+    def test_returns_false_on_ssh_error(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = SshError("timeout")
+        assert _vslam_config_exists(mock_client) is False
+
+
+class TestRunVslamConfig:
+    def test_full_flow(self, mock_client: MagicMock, tmp_path: Path) -> None:
+        bctx = _bctx(tmp_path)
+
+        mock_client.push.return_value = _ssh_ok()
+        mock_client.run.side_effect = [
+            _ssh_ok(),  # sudo cp
+            _ssh_ok(),  # rm cleanup
+        ]
+
+        _run_vslam_config(mock_client, bctx)
+
+        mock_client.push.assert_called_once()
+        push_args = mock_client.push.call_args[0]
+        assert str(push_args[1]) == "~/vslam.yaml"
+        # sudo cp was called
+        cp_cmd = mock_client.run.call_args_list[0][0][0]
+        assert "sudo" in " ".join(cp_cmd)
+        assert "/etc/mower/vslam.yaml" in " ".join(cp_cmd)
+
+    def test_push_failure_exits(self, mock_client: MagicMock, tmp_path: Path) -> None:
+        bctx = _bctx(tmp_path)
+
+        mock_client.push.side_effect = SshError("scp failed")
+
+        with pytest.raises(ClickExit):
+            _run_vslam_config(mock_client, bctx)
+
+
+# ---------------------------------------------------------------------------
+# 4.7 — vslam-services step
+# ---------------------------------------------------------------------------
+
+
+class TestVslamServicesActive:
+    def test_returns_true_when_both_active(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = [
+            _ssh_ok(),  # mower-vslam active
+            _ssh_ok(),  # mower-vslam-bridge active
+        ]
+        assert _vslam_services_active(mock_client) is True
+
+    def test_returns_false_when_vslam_inactive(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = [
+            _ssh_fail(returncode=3),  # mower-vslam inactive
+            _ssh_ok(),
+        ]
+        assert _vslam_services_active(mock_client) is False
+
+    def test_returns_false_when_bridge_inactive(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = [
+            _ssh_ok(),
+            _ssh_fail(returncode=3),  # bridge inactive
+        ]
+        assert _vslam_services_active(mock_client) is False
+
+    def test_returns_false_on_ssh_error(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = SshError("network unreachable")
+        assert _vslam_services_active(mock_client) is False
+
+
+class TestRunVslamServices:
+    def test_full_flow(self, mock_client: MagicMock, tmp_path: Path) -> None:
+        bctx = _bctx(tmp_path, yes=True)
+
+        mock_client.run.side_effect = [
+            _ssh_ok(),  # vslam install
+            _ssh_ok(),  # bridge-install
+            _ssh_ok(),  # systemctl start
+        ]
+
+        _run_vslam_services(mock_client, bctx)
+
+        assert mock_client.run.call_count == 3
+        # vslam install
+        vslam_cmd = mock_client.run.call_args_list[0][0][0]
+        assert "vslam install" in " ".join(vslam_cmd)
+        # bridge-install
+        bridge_cmd = mock_client.run.call_args_list[1][0][0]
+        assert "bridge-install" in " ".join(bridge_cmd)
+        # systemctl start
+        start_cmd = mock_client.run.call_args_list[2][0][0]
+        assert "systemctl" in " ".join(start_cmd)
+        assert "mower-vslam" in " ".join(start_cmd)
+
+    def test_vslam_install_failure_exits(self, mock_client: MagicMock, tmp_path: Path) -> None:
+        bctx = _bctx(tmp_path, yes=True)
+        mock_client.run.return_value = _ssh_fail(returncode=1, stderr="install error")
+
+        with pytest.raises(ClickExit):
+            _run_vslam_services(mock_client, bctx)
+
+    def test_skipped_when_not_confirmed(self, mock_client: MagicMock, tmp_path: Path) -> None:
+        bctx = _bctx(tmp_path, yes=False)
+
+        with patch("mower_rover.cli.bringup.input", return_value="n"):
+            _run_vslam_services(mock_client, bctx)
+
+        mock_client.run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 4.8 — Step ordering
+# ---------------------------------------------------------------------------
+
+
+class TestStepOrdering:
+    def test_step_names_match_bringup_steps(self) -> None:
+        from mower_rover.cli.bringup import BRINGUP_STEPS
+
+        assert tuple(s.name for s in BRINGUP_STEPS) == STEP_NAMES
+
+    def test_step_names_tuple(self) -> None:
+        assert STEP_NAMES == (
+            "check-ssh",
+            "harden",
+            "pixhawk-udev",
+            "install-uv",
+            "install-cli",
+            "verify",
+            "service",
+            "vslam-config",
+            "vslam-services",
+        )

@@ -22,6 +22,28 @@ def runner() -> CliRunner:
 # --- mower-jetson -----------------------------------------------------------
 
 
+def test_jetson_detect_help(runner: CliRunner) -> None:
+    result = runner.invoke(jetson_app, ["detect", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "detect" in result.stdout.lower()
+    assert "/dev/pixhawk" in result.stdout
+    assert "--json" in result.stdout
+
+
+def test_jetson_vslam_bridge_start_help(runner: CliRunner) -> None:
+    result = runner.invoke(jetson_app, ["vslam", "bridge-start", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "bridge" in result.stdout.lower()
+    assert "--user-level" in result.stdout
+
+
+def test_jetson_vslam_bridge_stop_help(runner: CliRunner) -> None:
+    result = runner.invoke(jetson_app, ["vslam", "bridge-stop", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "bridge" in result.stdout.lower()
+    assert "--user-level" in result.stdout
+
+
 def test_jetson_info_text(runner: CliRunner) -> None:
     result = runner.invoke(jetson_app, ["info"])
     assert result.exit_code == 0, result.output

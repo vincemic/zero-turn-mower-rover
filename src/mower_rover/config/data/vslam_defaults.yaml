@@ -21,6 +21,6 @@ vslam:
     yaw: 0.0        # Yaw offset (degrees)
 
 bridge:
-  serial_device: /dev/ttyACM0   # Pixhawk USB (SERIAL0) — auto-enumerated
+  serial_device: /dev/pixhawk     # Pixhawk USB via udev symlink (90-pixhawk-usb.rules)
   source_system: 1              # MAVLink system ID (same as autopilot)
   source_component: 197         # MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY

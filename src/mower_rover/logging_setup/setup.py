@@ -7,6 +7,7 @@ Avoid shadowing stdlib `logging` by living under `logging_setup`.
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 import sys
 import uuid
@@ -44,7 +45,12 @@ def configure_logging(
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     log_file = target_dir / f"mower-{stamp}-{cid}.jsonl"
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=5,
+        encoding="utf-8",
+    )
     file_handler.setFormatter(logging.Formatter("%(message)s"))
 
     console_handler = logging.StreamHandler(sys.stderr)

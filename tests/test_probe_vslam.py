@@ -29,6 +29,7 @@ class TestVslamChecksRegistered:
 
     EXPECTED_CHECKS = {
         "oakd_vslam_config",
+        "pixhawk_symlink",
         "vslam_process",
         "vslam_bridge",
         "vslam_pose_rate",
@@ -60,6 +61,9 @@ class TestVslamChecksRegistered:
 
     def test_oakd_vslam_config_depends_on_oakd(self) -> None:
         assert "oakd" in _REGISTRY["oakd_vslam_config"].depends_on
+
+    def test_pixhawk_symlink_has_no_deps(self) -> None:
+        assert _REGISTRY["pixhawk_symlink"].depends_on == ()
 
 
 # ------------------------------------------------------------------
@@ -371,6 +375,28 @@ class TestVslamConfidence:
         fn = _REGISTRY["vslam_confidence"].fn
         passed, detail = fn(tmp_path)
         assert passed is False
+
+
+# ------------------------------------------------------------------
+# pixhawk_symlink check
+# ------------------------------------------------------------------
+
+
+class TestPixhawkSymlink:
+    def test_pass_symlink_present(self, tmp_path: Path) -> None:
+        dev_pixhawk = tmp_path / "dev" / "pixhawk"
+        dev_pixhawk.parent.mkdir(parents=True, exist_ok=True)
+        dev_pixhawk.write_text("", encoding="utf-8")  # placeholder
+        fn = _REGISTRY["pixhawk_symlink"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "/dev/pixhawk" in detail
+
+    def test_fail_symlink_missing(self, tmp_path: Path) -> None:
+        fn = _REGISTRY["pixhawk_symlink"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "90-pixhawk-usb.rules" in detail
 
 
 # ------------------------------------------------------------------

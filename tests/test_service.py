@@ -24,6 +24,7 @@ from mower_rover.service.unit import (
     VSLAM_UNIT_NAME,
     generate_service_unit,
     generate_unit_file,
+    generate_vslam_bridge_unit_file,
     generate_vslam_unit_file,
     install_service,
     install_vslam_service,
@@ -122,6 +123,15 @@ class TestGenerateUnitFile:
             health_interval_s=60,
         )
         assert "WorkingDirectory=/opt/mower" in content
+
+    def test_no_runtime_directory(self) -> None:
+        content = generate_unit_file(
+            mower_jetson_path="/usr/bin/mower-jetson",
+            user="mower",
+            home_dir="/home/mower",
+            health_interval_s=60,
+        )
+        assert "RuntimeDirectory" not in content
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +390,60 @@ class TestGenerateVslamUnitFile:
             user_level=False,
         )
         assert "User=mower" in content
+
+    def test_runtime_directory_mower(self) -> None:
+        content = generate_vslam_unit_file(
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "RuntimeDirectory=mower" in content
+
+
+# ---------------------------------------------------------------------------
+# generate_vslam_bridge_unit_file
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateVslamBridgeUnitFile:
+    def test_binds_to_pixhawk_device(self) -> None:
+        content = generate_vslam_bridge_unit_file(
+            mower_jetson_path="/usr/bin/mower-jetson",
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "BindsTo=dev-pixhawk.device" in content
+
+    def test_does_not_bind_to_ttyACM0(self) -> None:
+        content = generate_vslam_bridge_unit_file(
+            mower_jetson_path="/usr/bin/mower-jetson",
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "ttyACM0" not in content
+
+    def test_runtime_directory_mower(self) -> None:
+        content = generate_vslam_bridge_unit_file(
+            mower_jetson_path="/usr/bin/mower-jetson",
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "RuntimeDirectory=mower" in content
+
+    def test_exec_start(self) -> None:
+        content = generate_vslam_bridge_unit_file(
+            mower_jetson_path="/usr/local/bin/mower-jetson",
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "ExecStart=/usr/local/bin/mower-jetson vslam bridge-run" in content
+
+    def test_after_vslam_service(self) -> None:
+        content = generate_vslam_bridge_unit_file(
+            mower_jetson_path="/usr/bin/mower-jetson",
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "After=network.target mower-vslam.service" in content
 
 
 # ---------------------------------------------------------------------------
