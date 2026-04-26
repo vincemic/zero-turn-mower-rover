@@ -155,3 +155,94 @@ def test_push_timeout_raises(endpoint: JetsonEndpoint, tmp_path: Path) -> None:
         pytest.raises(SshError, match="timed out"),
     ):
         client.push(tmp_path / "file.sh", "/opt/mower/file.sh", timeout=1.0)
+
+
+# -- run_streaming ---------------------------------------------------------
+
+
+def test_run_streaming_collects_output(endpoint: JetsonEndpoint) -> None:
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    mock_proc = MagicMock()
+    mock_proc.stdout = iter(["line1\n", "line2\n", "line3\n"])
+    mock_proc.stderr = MagicMock()
+    mock_proc.stderr.read.return_value = ""
+    mock_proc.returncode = 0
+    mock_proc.wait.return_value = 0
+
+    with patch("mower_rover.transport.ssh.subprocess.Popen", return_value=mock_proc):
+        result = client.run_streaming(["make", "-j12"])
+
+    assert result.ok
+    assert result.stdout == "line1\nline2\nline3"
+    assert result.returncode == 0
+
+
+def test_run_streaming_on_line_callback(endpoint: JetsonEndpoint) -> None:
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    collected: list[str] = []
+    mock_proc = MagicMock()
+    mock_proc.stdout = iter(["hello\n", "world\n"])
+    mock_proc.stderr = MagicMock()
+    mock_proc.stderr.read.return_value = ""
+    mock_proc.returncode = 0
+    mock_proc.wait.return_value = 0
+
+    with patch("mower_rover.transport.ssh.subprocess.Popen", return_value=mock_proc):
+        result = client.run_streaming(["echo", "test"], on_line=collected.append)
+
+    assert collected == ["hello", "world"]
+    assert result.ok
+
+
+def test_run_streaming_no_callback_buffers(endpoint: JetsonEndpoint) -> None:
+    """When on_line is None, output is still captured in SshResult.stdout."""
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    mock_proc = MagicMock()
+    mock_proc.stdout = iter(["alpha\n", "beta\n"])
+    mock_proc.stderr = MagicMock()
+    mock_proc.stderr.read.return_value = ""
+    mock_proc.returncode = 0
+    mock_proc.wait.return_value = 0
+
+    with patch("mower_rover.transport.ssh.subprocess.Popen", return_value=mock_proc):
+        result = client.run_streaming(["ls"], on_line=None)
+
+    assert result.stdout == "alpha\nbeta"
+
+
+def test_run_streaming_includes_server_alive_interval(endpoint: JetsonEndpoint) -> None:
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    mock_proc = MagicMock()
+    mock_proc.stdout = iter([])
+    mock_proc.stderr = MagicMock()
+    mock_proc.stderr.read.return_value = ""
+    mock_proc.returncode = 0
+    mock_proc.wait.return_value = 0
+
+    with patch(
+        "mower_rover.transport.ssh.subprocess.Popen", return_value=mock_proc
+    ) as popen_mock:
+        client.run_streaming(["ls"])
+
+    argv = popen_mock.call_args[0][0]
+    assert "ServerAliveInterval=30" in argv
+
+
+def test_run_streaming_timeout_raises(endpoint: JetsonEndpoint) -> None:
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+    mock_proc = MagicMock()
+    mock_proc.stdout = iter([])
+    mock_proc.stderr = MagicMock()
+    mock_proc.stderr.read.return_value = ""
+    mock_proc.wait.side_effect = [
+        subprocess.TimeoutExpired(cmd="ssh", timeout=0.1),
+        0,  # after kill()
+    ]
+    mock_proc.kill.return_value = None
+    mock_proc.returncode = -9
+
+    with (
+        patch("mower_rover.transport.ssh.subprocess.Popen", return_value=mock_proc),
+        pytest.raises(SshError, match="timed out"),
+    ):
+        client.run_streaming(["sleep", "9999"], timeout=0.1)

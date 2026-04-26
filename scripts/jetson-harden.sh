@@ -352,21 +352,28 @@ JCLOCKS
 # 13. RTAB-Map — build from source with CUDA/OpenCV
 # ---------------------------------------------------------------------------
 harden_rtabmap() {
-    local tag="0.23.2"
+    local tag="0.21.6"
     local src_dir="/opt/rtabmap-src"
+    local marker_dir="/usr/local/share/mower-build"
+    local marker="${marker_dir}/rtabmap.json"
 
-    # Already installed?
-    if command -v rtabmap &>/dev/null && rtabmap --version 2>&1 | grep -q '0\.23'; then
+    # Already installed at the correct version?
+    if [[ -f "$marker" ]] && jq -e --arg v "$tag" '.version == $v' "$marker" &>/dev/null; then
         STATUS[rtabmap]="already"
         return
     fi
 
-    # Build dependencies
+    # Build dependencies (ccache included via common build deps)
     apt-get update -qq
     apt-get install -y --no-install-recommends \
-        cmake build-essential git \
+        cmake build-essential git ccache jq \
         libopencv-dev libsqlite3-dev libpcl-dev \
         libboost-all-dev libeigen3-dev libsuitesparse-dev
+
+    # ccache setup
+    export CCACHE_DIR=/var/lib/mower/ccache
+    mkdir -p "$CCACHE_DIR"
+    ccache -M 5G
 
     # Clone (or re-use existing checkout)
     if [[ -d "$src_dir/.git" ]]; then
@@ -382,6 +389,9 @@ harden_rtabmap() {
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache \
         -DWITH_CUDA=ON \
         -DWITH_QT=OFF \
         -DWITH_PYTHON=OFF \
@@ -392,11 +402,15 @@ harden_rtabmap() {
     ldconfig
 
     # Verify
-    if ! rtabmap --version 2>&1 | grep -q '0\.23'; then
+    if ! rtabmap --version 2>&1 | grep -q '0\.21'; then
         echo "ERROR: RTAB-Map install verification failed" >&2
         STATUS[rtabmap]="failed"
         return 1
     fi
+
+    # Write version marker
+    mkdir -p "$marker_dir"
+    echo "{\"component\": \"rtabmap\", \"version\": \"${tag}\", \"built\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$marker"
     STATUS[rtabmap]="applied"
 }
 
@@ -404,22 +418,31 @@ harden_rtabmap() {
 # 14. depthai-core C++ SDK — build from source
 # ---------------------------------------------------------------------------
 harden_depthai_core() {
+    local tag="v3.5.0"
     local src_dir="/opt/depthai-core-src"
-    local marker="/usr/local/lib/libdepthai-core.so"
+    local so_marker="/usr/local/lib/libdepthai-core.so"
+    local marker_dir="/usr/local/share/mower-build"
+    local marker="${marker_dir}/depthai.json"
 
-    if [[ -f "$marker" ]]; then
+    # Already installed at the correct version?
+    if [[ -f "$marker" ]] && jq -e --arg v "$tag" '.version == $v' "$marker" &>/dev/null; then
         STATUS[depthai_core]="already"
         return
     fi
 
     apt-get install -y --no-install-recommends \
-        cmake build-essential git libusb-1.0-0-dev
+        cmake build-essential git ccache jq libusb-1.0-0-dev
+
+    # ccache setup
+    export CCACHE_DIR=/var/lib/mower/ccache
+    mkdir -p "$CCACHE_DIR"
+    ccache -M 5G
 
     if [[ -d "$src_dir/.git" ]]; then
         echo "  Re-using existing depthai-core source at $src_dir"
     else
         rm -rf "$src_dir"
-        git clone --depth 1 --recursive \
+        git clone --depth 1 --branch "$tag" --recursive \
             https://github.com/luxonis/depthai-core.git "$src_dir"
     fi
 
@@ -427,17 +450,23 @@ harden_depthai_core() {
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DBUILD_SHARED_LIBS=ON
 
     make -j"$(nproc)"
     make install
     ldconfig
 
-    if [[ ! -f "$marker" ]]; then
+    if [[ ! -f "$so_marker" ]]; then
         echo "ERROR: depthai-core install verification failed" >&2
         STATUS[depthai_core]="failed"
         return 1
     fi
+
+    # Write version marker
+    mkdir -p "$marker_dir"
+    echo "{\"component\": \"depthai\", \"version\": \"${tag}\", \"built\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$marker"
     STATUS[depthai_core]="applied"
 }
 
@@ -448,8 +477,12 @@ harden_slam_node() {
     local build_script
     build_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../contrib/rtabmap_slam_node/build.sh"
     local binary="/usr/local/bin/rtabmap_slam_node"
+    local marker_dir="/usr/local/share/mower-build"
+    local marker="${marker_dir}/slam_node.json"
+    local slam_node_version="1.0.0"
 
-    if [[ -f "$binary" ]]; then
+    # Already installed at the correct version?
+    if [[ -f "$marker" ]] && jq -e --arg v "$slam_node_version" '.version == $v' "$marker" &>/dev/null; then
         STATUS[slam_node]="already"
         return
     fi
@@ -466,6 +499,10 @@ harden_slam_node() {
         STATUS[slam_node]="failed"
         return 1
     fi
+
+    # Write version marker
+    mkdir -p "$marker_dir"
+    echo "{\"component\": \"slam_node\", \"version\": \"${slam_node_version}\", \"built\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$marker"
     STATUS[slam_node]="applied"
 }
 
@@ -492,8 +529,8 @@ print_summary() {
         "oakd_udev:OAK-D udev rules (80-oakd-usb.rules)"
         "usb_params:USB kernel params (autosuspend, usbfs_memory_mb)"
         "jetson_clocks:jetson_clocks service (lock clocks at boot)"
-        "rtabmap:RTAB-Map 0.23.x (source build, CUDA+OpenCV)"
-        "depthai_core:depthai-core C++ SDK (source build)"
+        "rtabmap:RTAB-Map 0.21.6 (source build, CUDA+OpenCV)"
+        "depthai_core:depthai-core v3.5.0 C++ SDK (source build)"
         "slam_node:RTAB-Map SLAM node binary (custom C++)"
     )
     for entry in "${labels[@]}"; do
@@ -519,7 +556,17 @@ print_summary() {
 # Main
 # ---------------------------------------------------------------------------
 main() {
-    echo "jetson-harden.sh — Idempotent field-hardening for Jetson AGX Orin (15 steps)"
+    local os_only=false
+    if [[ "${1:-}" == "--os-only" ]]; then
+        os_only=true
+    fi
+
+    local total=15
+    if $os_only; then
+        total=12
+    fi
+
+    echo "jetson-harden.sh — Idempotent field-hardening for Jetson AGX Orin (${total} steps)"
     echo ""
 
     if [[ "$(id -u)" -ne 0 ]]; then
@@ -527,50 +574,52 @@ main() {
         exit 1
     fi
 
-    echo "[1/15] Headless mode..."
+    echo "[1/${total}] Headless mode..."
     harden_headless
 
-    echo "[2/15] Disabling unnecessary services..."
+    echo "[2/${total}] Disabling unnecessary services..."
     harden_services
 
-    echo "[3/15] Filesystem tuning..."
+    echo "[3/${total}] Filesystem tuning..."
     harden_fstab
 
-    echo "[4/15] Log rotation & journald limits..."
+    echo "[4/${total}] Log rotation & journald limits..."
     harden_logrotate
 
-    echo "[5/15] OpenBLAS ARM fix..."
+    echo "[5/${total}] OpenBLAS ARM fix..."
     harden_openblas
 
-    echo "[6/15] nvpmodel (50W)..."
+    echo "[6/${total}] nvpmodel (50W)..."
     harden_nvpmodel
 
-    echo "[7/15] Hardware watchdog..."
+    echo "[7/${total}] Hardware watchdog..."
     harden_watchdog
 
-    echo "[8/15] apt-mark hold L4T packages..."
+    echo "[8/${total}] apt-mark hold L4T packages..."
     harden_apt_hold
 
-    echo "[9/15] SSH hardening..."
+    echo "[9/${total}] SSH hardening..."
     harden_ssh
 
-    echo "[10/15] OAK-D udev rules..."
+    echo "[10/${total}] OAK-D udev rules..."
     harden_oakd_udev
 
-    echo "[11/15] USB kernel params..."
+    echo "[11/${total}] USB kernel params..."
     harden_usb_params
 
-    echo "[12/15] jetson_clocks service..."
+    echo "[12/${total}] jetson_clocks service..."
     harden_jetson_clocks
 
-    echo "[13/15] RTAB-Map (source build)..."
-    harden_rtabmap
+    if ! $os_only; then
+        echo "[13/${total}] RTAB-Map (source build)..."
+        harden_rtabmap
 
-    echo "[14/15] depthai-core C++ SDK (source build)..."
-    harden_depthai_core
+        echo "[14/${total}] depthai-core C++ SDK (source build)..."
+        harden_depthai_core
 
-    echo "[15/15] RTAB-Map SLAM node binary..."
-    harden_slam_node
+        echo "[15/${total}] RTAB-Map SLAM node binary..."
+        harden_slam_node
+    fi
 
     print_summary
 }

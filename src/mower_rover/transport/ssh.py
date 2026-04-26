@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -175,6 +175,71 @@ class JetsonClient:
             raise SshError(
                 f"remote command failed (exit {result.returncode}): {result.stderr.strip()}"
             )
+        return result
+
+    def run_streaming(
+        self,
+        remote_argv: Sequence[str],
+        *,
+        timeout: float | None = 3600.0,
+        on_line: Callable[[str], None] | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> SshResult:
+        """Run *remote_argv* on the Jetson with line-by-line stdout streaming.
+
+        If *on_line* is provided, each stdout line is passed to it as it
+        arrives.  If *on_line* is ``None``, output is buffered and returned
+        in :pyattr:`SshResult.stdout`.
+
+        Adds ``ServerAliveInterval=30`` to keep long-running builds alive.
+        """
+        argv = self.build_ssh_argv(remote_argv)
+        # Insert ServerAliveInterval for long-running streaming commands.
+        argv[1:1] = ["-o", "ServerAliveInterval=30"]
+        env = self._build_env(extra_env)
+        self._log.info("ssh_streaming_start", argv=_redact(argv))
+
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+        except FileNotFoundError as exc:
+            raise SshError(f"ssh binary disappeared: {exc}") from exc
+
+        lines: list[str] = []
+        assert proc.stdout is not None  # guaranteed by stdout=PIPE
+        for raw_line in proc.stdout:
+            line = raw_line.rstrip("\n")
+            lines.append(line)
+            if on_line is not None:
+                on_line(line)
+
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise SshError(
+                f"ssh streaming timed out after {timeout}s: {' '.join(remote_argv)}"
+            ) from None
+
+        stderr = proc.stderr.read() if proc.stderr else ""
+        result = SshResult(
+            argv=argv,
+            returncode=proc.returncode,
+            stdout="\n".join(lines),
+            stderr=stderr,
+        )
+        self._log.info(
+            "ssh_streaming_done",
+            returncode=result.returncode,
+            stdout_lines=len(lines),
+            stderr_bytes=len(result.stderr),
+        )
         return result
 
     def pull(

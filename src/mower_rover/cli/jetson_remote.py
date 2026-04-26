@@ -284,12 +284,52 @@ def info_command(
 
 # --- setup ------------------------------------------------------------------
 
+from mower_rover.cli.backup import backup_command  # noqa: E402
 from mower_rover.cli.bringup import bringup_command  # noqa: E402
 from mower_rover.cli.setup import health_command, setup_command  # noqa: E402
 
 app.command("setup")(setup_command)
 app.command("health")(health_command)
 app.command("bringup")(bringup_command)
+app.command("backup")(backup_command)
+
+
+# --- clear-host-key ---------------------------------------------------------
+
+
+@app.command("clear-host-key")
+def clear_host_key_command(
+    host: str | None = _HostOpt,
+    user: str | None = _UserOpt,
+    port: int | None = _PortOpt,
+    key: Path | None = _KeyOpt,
+    config: Path | None = _CfgOpt,
+) -> None:
+    """Remove a stale SSH host key for the Jetson from known_hosts."""
+    import subprocess as _subprocess
+
+    endpoint = resolve_endpoint(host, user, port, key, config)
+    resolved_host = endpoint.host
+    typer.echo(f"Removing host key for {resolved_host}…")
+    try:
+        proc = _subprocess.run(
+            ["ssh-keygen", "-R", resolved_host],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (FileNotFoundError, _subprocess.TimeoutExpired) as exc:
+        typer.echo(f"ERROR: ssh-keygen failed: {exc}", err=True)
+        raise typer.Exit(code=3) from exc
+
+    if proc.returncode != 0:
+        typer.echo(
+            f"ERROR: ssh-keygen -R exited {proc.returncode}: {proc.stderr.strip()}",
+            err=True,
+        )
+        raise typer.Exit(code=3)
+
+    typer.echo(f"Host key for {resolved_host} removed.")
 
 
 __all__ = ["app", "resolve_endpoint", "client_for"]

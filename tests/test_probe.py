@@ -48,6 +48,9 @@ class TestRegistry:
             "oakd_usb_autosuspend",
             "oakd_usbfs_memory",
             "oakd_thermal_gate",
+            "health_service",
+            "loginctl_linger",
+            "vslam_socket_active",
         }
         assert expected.issubset(set(_REGISTRY.keys()))
 

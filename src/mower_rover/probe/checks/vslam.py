@@ -13,6 +13,8 @@ Dependency chain::
 from __future__ import annotations
 
 import importlib.resources
+import socket
+import struct
 import subprocess
 from pathlib import Path
 
@@ -87,6 +89,39 @@ def check_vslam_bridge(sysroot: Path) -> tuple[bool, str]:
     if not sock.exists():
         return False, f"{_BRIDGE_SERVICE} active but socket missing: {sock}"
     return True, f"{_BRIDGE_SERVICE} active, socket present"
+
+
+@register("vslam_socket_active", severity=Severity.CRITICAL, depends_on=("vslam_bridge",))
+def check_vslam_socket_active(sysroot: Path) -> tuple[bool, str]:
+    """Connect to the VSLAM pose socket and verify a pose frame is readable."""
+    if not hasattr(socket, "AF_UNIX"):
+        return False, "AF_UNIX not available (not a Unix host)"
+
+    sock_path = sysroot / _SOCKET_PATH
+    if not sock_path.exists():
+        return False, f"Socket not found: {sock_path}"
+
+    msg_size = struct.calcsize("<Q27fBB")  # 118 bytes
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(10)
+        try:
+            s.connect(str(sock_path))
+            data = s.recv(msg_size)
+        finally:
+            s.close()
+        if len(data) < msg_size:
+            return False, f"Short read: {len(data)}/{msg_size} bytes"
+        confidence = struct.unpack_from("B", data, msg_size - 2)[0]
+        return True, f"pose received, confidence={confidence}"
+    except FileNotFoundError:
+        return False, f"Socket not found: {sock_path}"
+    except socket.timeout:
+        return False, "Socket read timed out after 10s"
+    except ConnectionRefusedError:
+        return False, "Socket connection refused"
+    except OSError as exc:
+        return False, f"Socket error: {exc}"
 
 
 @register("vslam_pose_rate", severity=Severity.WARNING, depends_on=("vslam_bridge",))

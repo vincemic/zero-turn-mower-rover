@@ -6,9 +6,11 @@ monkeypatched subprocess calls.  Runs on Windows and Linux alike.
 
 from __future__ import annotations
 
+import socket
+import struct
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import yaml
 
@@ -32,6 +34,7 @@ class TestVslamChecksRegistered:
         "pixhawk_symlink",
         "vslam_process",
         "vslam_bridge",
+        "vslam_socket_active",
         "vslam_pose_rate",
         "vslam_params",
         "vslam_lua_script",
@@ -49,6 +52,9 @@ class TestVslamChecksRegistered:
 
     def test_dependency_chain_bridge_to_pose_rate(self) -> None:
         assert "vslam_bridge" in _REGISTRY["vslam_pose_rate"].depends_on
+
+    def test_vslam_socket_active_depends_on_bridge(self) -> None:
+        assert "vslam_bridge" in _REGISTRY["vslam_socket_active"].depends_on
 
     def test_vslam_params_depends_on_oakd(self) -> None:
         assert "oakd" in _REGISTRY["vslam_params"].depends_on
@@ -397,6 +403,111 @@ class TestPixhawkSymlink:
         passed, detail = fn(tmp_path)
         assert passed is False
         assert "90-pixhawk-usb.rules" in detail
+
+
+# ------------------------------------------------------------------
+# vslam_socket_active check
+# ------------------------------------------------------------------
+
+
+class TestVslamSocketActive:
+    _MSG_SIZE = struct.calcsize("<Q27fBB")  # 118 bytes
+    _VSLAM_SOCKET_MOD = "mower_rover.probe.checks.vslam.socket"
+
+    def _make_fake_frame(self, confidence: int = 3) -> bytes:
+        """Build a minimal pose frame with the given confidence byte."""
+        parts = struct.pack("<Q", 1234567890)
+        parts += struct.pack("<27f", *(0.0 for _ in range(27)))
+        parts += struct.pack("BB", confidence, 0)
+        return parts
+
+    def _mock_socket_module(self, mock_sock: MagicMock | None = None) -> MagicMock:
+        """Create a mock socket module with AF_UNIX and SOCK_STREAM."""
+        mod = MagicMock()
+        mod.AF_UNIX = 1
+        mod.SOCK_STREAM = 1
+        mod.timeout = socket.timeout
+        if mock_sock is not None:
+            mod.socket.return_value = mock_sock
+        return mod
+
+    def test_pass_pose_received(self, tmp_path: Path) -> None:
+        _create_socket(tmp_path)
+        frame = self._make_fake_frame(confidence=3)
+        mock_sock = MagicMock()
+        mock_sock.recv.return_value = frame
+        mock_mod = self._mock_socket_module(mock_sock)
+
+        with patch(self._VSLAM_SOCKET_MOD, mock_mod):
+            fn = _REGISTRY["vslam_socket_active"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is True
+            assert "confidence=3" in detail
+
+    def test_fail_socket_not_found(self, tmp_path: Path) -> None:
+        mock_mod = self._mock_socket_module()
+        with patch(self._VSLAM_SOCKET_MOD, mock_mod):
+            fn = _REGISTRY["vslam_socket_active"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is False
+            assert "not found" in detail.lower()
+
+    def test_fail_no_af_unix(self, tmp_path: Path) -> None:
+        _create_socket(tmp_path)
+        mock_mod = MagicMock(spec=[])  # empty spec → hasattr(mock_mod, 'AF_UNIX') is False
+        with patch(self._VSLAM_SOCKET_MOD, mock_mod):
+            fn = _REGISTRY["vslam_socket_active"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is False
+            assert "af_unix" in detail.lower()
+
+    def test_fail_short_read(self, tmp_path: Path) -> None:
+        _create_socket(tmp_path)
+        mock_sock = MagicMock()
+        mock_sock.recv.return_value = b"\x00" * 10
+        mock_mod = self._mock_socket_module(mock_sock)
+
+        with patch(self._VSLAM_SOCKET_MOD, mock_mod):
+            fn = _REGISTRY["vslam_socket_active"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is False
+            assert "short read" in detail.lower()
+
+    def test_fail_timeout(self, tmp_path: Path) -> None:
+        _create_socket(tmp_path)
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = socket.timeout("timed out")
+        mock_mod = self._mock_socket_module(mock_sock)
+
+        with patch(self._VSLAM_SOCKET_MOD, mock_mod):
+            fn = _REGISTRY["vslam_socket_active"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is False
+            assert "timed out" in detail.lower()
+
+    def test_fail_connection_refused(self, tmp_path: Path) -> None:
+        _create_socket(tmp_path)
+        mock_sock = MagicMock()
+        mock_sock.connect.side_effect = ConnectionRefusedError("refused")
+        mock_mod = self._mock_socket_module(mock_sock)
+
+        with patch(self._VSLAM_SOCKET_MOD, mock_mod):
+            fn = _REGISTRY["vslam_socket_active"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is False
+            assert "refused" in detail.lower()
+
+    def test_fail_os_error(self, tmp_path: Path) -> None:
+        _create_socket(tmp_path)
+        mock_sock = MagicMock()
+        mock_sock.connect.side_effect = OSError("broken pipe")
+        mock_mod = self._mock_socket_module(mock_sock)
+
+        with patch(self._VSLAM_SOCKET_MOD, mock_mod):
+            fn = _REGISTRY["vslam_socket_active"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is False
+            assert "socket error" in detail.lower()
 
 
 # ------------------------------------------------------------------

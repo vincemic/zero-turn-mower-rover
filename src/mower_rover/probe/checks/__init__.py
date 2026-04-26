@@ -9,6 +9,7 @@ from mower_rover.probe.checks import (  # noqa: F401
     oakd,
     power_mode,
     python_ver,
+    service,
     ssh_hardening,
     thermal,
     usb_tuning,
