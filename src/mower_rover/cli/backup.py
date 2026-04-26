@@ -7,7 +7,7 @@ from pathlib import Path
 import typer
 
 from mower_rover.logging_setup.setup import get_logger
-from mower_rover.transport.ssh import JetsonClient, SshError
+from mower_rover.transport.ssh import SshError
 
 _REMOTE_CONFIG_FILES = (
     "/etc/mower/vslam.yaml",

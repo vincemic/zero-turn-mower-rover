@@ -33,7 +33,7 @@ def _depthai_usb_speed() -> int | None:
     Returns ``None`` if depthai is not installed or connection fails.
     """
     try:
-        import depthai as dai  # type: ignore[import-untyped]
+        import depthai as dai
     except ImportError:
         return None
     try:

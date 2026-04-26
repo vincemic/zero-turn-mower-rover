@@ -57,20 +57,20 @@ def listen_vslam_health(
         msg_type = msg.get_type()
 
         if msg_type == "HEARTBEAT":
-            src_component = msg.get_srcComponent()  # type: ignore[attr-defined]
+            src_component = msg.get_srcComponent()
             if src_component == _BRIDGE_COMPONENT_ID:
                 bridge_heartbeat_seen = True
             continue
 
         if msg_type == "NAMED_VALUE_FLOAT":
-            name = msg.name  # type: ignore[attr-defined]
+            name = msg.name
             # pymavlink may return bytes or str depending on version
             if isinstance(name, bytes):
                 name = name.rstrip(b"\x00").decode("ascii", errors="replace")
             else:
                 name = name.rstrip("\x00")
             if name in _METRIC_NAMES:
-                metrics[name] = float(msg.value)  # type: ignore[attr-defined]
+                metrics[name] = float(msg.value)
 
         # Check if we have all metrics
         if metrics.keys() >= _METRIC_NAMES:

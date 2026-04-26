@@ -116,7 +116,7 @@ def check_vslam_socket_active(sysroot: Path) -> tuple[bool, str]:
         return True, f"pose received, confidence={confidence}"
     except FileNotFoundError:
         return False, f"Socket not found: {sock_path}"
-    except socket.timeout:
+    except TimeoutError:
         return False, "Socket read timed out after 10s"
     except ConnectionRefusedError:
         return False, "Socket connection refused"

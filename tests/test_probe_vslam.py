@@ -476,7 +476,7 @@ class TestVslamSocketActive:
     def test_fail_timeout(self, tmp_path: Path) -> None:
         _create_socket(tmp_path)
         mock_sock = MagicMock()
-        mock_sock.recv.side_effect = socket.timeout("timed out")
+        mock_sock.recv.side_effect = TimeoutError("timed out")
         mock_mod = self._mock_socket_module(mock_sock)
 
         with patch(self._VSLAM_SOCKET_MOD, mock_mod):

@@ -52,7 +52,7 @@ class _FTPSession:
 
         self._conn = conn
         self._ftp = mavftp.MAVFTP(
-            conn,  # type: ignore[arg-type]
+            conn,
             target_system=conn.target_system,  # type: ignore[attr-defined]
             target_component=conn.target_component,  # type: ignore[attr-defined]
         )

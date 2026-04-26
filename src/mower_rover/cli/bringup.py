@@ -35,6 +35,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -146,20 +147,16 @@ def _clear_host_key_needed(client: JetsonClient) -> bool:
             return True
         # SSH returned non-zero — check stderr for host-key errors
         stderr_lower = result.stderr.lower()
-        if (
+        return not (
             "remote host identification has changed" in stderr_lower
             or "host key verification failed" in stderr_lower
-        ):
-            return False
-        return True  # other failure, not a host-key issue
+        )
     except SshError as exc:
         msg = str(exc).lower()
-        if (
+        return not (
             "remote host identification has changed" in msg
             or "host key verification failed" in msg
-        ):
-            return False
-        return True  # other SSH failure, let check-ssh handle it
+        )
 
 
 def _run_clear_host_key(client: JetsonClient, bctx: BringupContext) -> None:
@@ -314,10 +311,8 @@ def _reboot_check(client: JetsonClient) -> bool:
 
 def _run_reboot_and_wait(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Rebooting Jetson…")
-    try:
+    with contextlib.suppress(SshError):
         client.run(["sudo", "reboot"], timeout=10)
-    except SshError:
-        pass  # SSH disconnect on reboot is expected
 
     bctx.console.print("  Waiting for Jetson to come back (up to 180s)…")
     deadline = time.monotonic() + 180
@@ -363,13 +358,14 @@ _BACKUP_DIR = Path.home() / ".local" / "share" / "mower" / "backups"
 
 def _read_version_marker(
     client: JetsonClient, component: str,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Read a version marker JSON from the Jetson, return parsed dict or None."""
     path = f"{VERSION_MARKER_DIR}/{component}.json"
     try:
         result = client.run(["cat", path], timeout=15)
         if result.ok and result.stdout.strip():
-            return _json.loads(result.stdout)
+            parsed: dict[str, Any] = _json.loads(result.stdout)
+            return parsed
     except (SshError, _json.JSONDecodeError, ValueError):
         pass
     return None
@@ -480,7 +476,13 @@ def _run_build_rtabmap(
         f" && make -j{jobs}"
         f" && make install && ldconfig"
         f" && mkdir -p {VERSION_MARKER_DIR}"
-        f' && echo \'{{"component":"rtabmap","version":"{tag}","built":"\'$(date -u +%Y-%m-%dT%H:%M:%SZ)\'"}}\''
+    )
+    marker_json = (
+        f'{{"component":"rtabmap","version":"{tag}",'
+        f'"built":"\'$(date -u +%Y-%m-%dT%H:%M:%SZ)\'"}}'
+    )
+    build_cmd += (
+        f' && echo \'{marker_json}\''
         f"    | tee {VERSION_MARKER_DIR}/rtabmap.json"
     )
 
@@ -542,7 +544,13 @@ def _run_build_depthai(
         f" && make -j{jobs}"
         f" && make install && ldconfig"
         f" && mkdir -p {VERSION_MARKER_DIR}"
-        f' && echo \'{{"component":"depthai","version":"{tag}","built":"\'$(date -u +%Y-%m-%dT%H:%M:%SZ)\'"}}\''
+    )
+    marker_json = (
+        f'{{"component":"depthai","version":"{tag}",'
+        f'"built":"\'$(date -u +%Y-%m-%dT%H:%M:%SZ)\'"}}'
+    )
+    build_cmd += (
+        f' && echo \'{marker_json}\''
         f"    | tee {VERSION_MARKER_DIR}/depthai.json"
     )
 
@@ -594,10 +602,8 @@ def _run_build_slam_node(client: JetsonClient, bctx: BringupContext) -> None:
 
     # Push the source tree
     bctx.console.print("  Pushing contrib/rtabmap_slam_node…")
-    try:
+    with contextlib.suppress(SshError):
         client.run(["mkdir", "-p", "/tmp/rtabmap_slam_node"], timeout=10)
-    except SshError:
-        pass
 
     for f in contrib_dir.rglob("*"):
         if f.is_file():
@@ -621,7 +627,13 @@ def _run_build_slam_node(client: JetsonClient, bctx: BringupContext) -> None:
         f" && make -j$(nproc)"
         f" && make install"
         f" && mkdir -p {VERSION_MARKER_DIR}"
-        f' && echo \'{{"component":"slam_node","version":"{SLAM_NODE_VERSION}","built":"\'$(date -u +%Y-%m-%dT%H:%M:%SZ)\'"}}\''
+    )
+    marker_json = (
+        f'{{"component":"slam_node","version":"{SLAM_NODE_VERSION}",'
+        f'"built":"\'$(date -u +%Y-%m-%dT%H:%M:%SZ)\'"}}'
+    )
+    build_cmd += (
+        f' && echo \'{marker_json}\''
         f"    | tee {VERSION_MARKER_DIR}/slam_node.json"
     )
 
@@ -1178,10 +1190,8 @@ def _final_verify_check(_client: JetsonClient) -> bool:
 
 def _run_final_verify(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Final reboot…")
-    try:
+    with contextlib.suppress(SshError):
         client.run(["sudo", "reboot"], timeout=10)
-    except SshError:
-        pass  # expected disconnect
 
     # Poll SSH (10s intervals, 180s deadline)
     bctx.console.print("  Waiting for Jetson to come back (up to 180s)…")
@@ -1507,11 +1517,9 @@ def bringup_command(
         ):
             # Find build-depthai in the remaining steps
             depthai_step = None
-            depthai_idx = None
-            for j, ss in enumerate(steps):
+            for _j, ss in enumerate(steps):
                 if ss.name == "build-depthai":
                     depthai_step = ss
-                    depthai_idx = j
                     break
 
             rtabmap_needs_run = not s.check(client)
@@ -1527,6 +1535,7 @@ def bringup_command(
                 def _run_in_thread(
                     name: str,
                     run_fn: Callable[[JetsonClient, BringupContext], None],
+                    errors: list[tuple[str, str]] = errors,
                 ) -> None:
                     try:
                         run_fn(client, bctx)

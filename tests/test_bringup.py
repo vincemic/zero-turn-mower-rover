@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import typer
 from click.exceptions import Exit as ClickExit
 from typer.testing import CliRunner
 
@@ -50,7 +48,6 @@ from mower_rover.cli.bringup import (
 from mower_rover.cli.laptop import app as laptop_app
 from mower_rover.config.laptop import JetsonEndpoint
 from mower_rover.transport.ssh import JetsonClient, SshError, SshResult
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -178,7 +175,9 @@ class TestClearHostKeyNeeded:
         )
         assert _clear_host_key_needed(mock_client) is False
 
-    def test_returns_false_on_host_key_verification_failed_in_result(self, mock_client: MagicMock) -> None:
+    def test_returns_false_on_host_key_verification_failed_in_result(
+        self, mock_client: MagicMock
+    ) -> None:
         mock_client.run.return_value = _ssh_fail(
             returncode=255,
             stderr="Host key verification failed.\n",
@@ -220,7 +219,10 @@ class TestRunClearHostKey:
     def test_exits_on_ssh_keygen_not_found(self, mock_client: MagicMock, tmp_path: Path) -> None:
         bctx = _bctx(tmp_path)
         with (
-            patch("mower_rover.cli.bringup.subprocess.run", side_effect=FileNotFoundError("ssh-keygen")),
+            patch(
+                "mower_rover.cli.bringup.subprocess.run",
+                side_effect=FileNotFoundError("ssh-keygen"),
+            ),
             pytest.raises(ClickExit),
         ):
             _run_clear_host_key(mock_client, bctx)
@@ -319,7 +321,9 @@ class TestRunRebootAndWait:
 
         assert call_count == 3
 
-    def test_timeout_if_jetson_never_comes_back(self, mock_client: MagicMock, tmp_path: Path) -> None:
+    def test_timeout_if_jetson_never_comes_back(
+        self, mock_client: MagicMock, tmp_path: Path
+    ) -> None:
         bctx = _bctx(tmp_path)
 
         call_count = 0

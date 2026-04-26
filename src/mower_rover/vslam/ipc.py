@@ -108,7 +108,7 @@ class PoseReader:
 
     def _connect(self) -> socket.socket:
         """Create and connect a new Unix stream socket."""
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined]  # AF_UNIX is Linux-only; this module runs on Jetson
         sock.connect(self._socket_path)
         self._log.info("socket_connected")
         return sock
