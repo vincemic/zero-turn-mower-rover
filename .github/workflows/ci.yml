@@ -14,7 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
       - name: Set up Python
@@ -27,3 +27,5 @@ jobs:
         run: uv run mypy
       - name: Pytest (no field, no sitl)
         run: uv run pytest -m "not field and not sitl"
+        env:
+          TERM: dumb

@@ -79,3 +79,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["depthai.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["mower_rover.vslam.ipc"]
+warn_unused_ignores = false
