@@ -24,7 +24,7 @@ from mower_rover.config.vslam import (
 def test_missing_file_returns_defaults(tmp_path: Path) -> None:
     cfg = load_vslam_config(tmp_path / "nonexistent.yaml")
     assert cfg.odometry_strategy == "f2m"
-    assert cfg.stereo_resolution == "400p"
+    assert cfg.stereo_resolution == "800p"
     assert cfg.stereo_fps == 30
     assert cfg.imu_rate_hz == 200
     assert cfg.pose_output_rate_hz == 20
@@ -32,6 +32,9 @@ def test_missing_file_returns_defaults(tmp_path: Path) -> None:
     assert cfg.loop_closure is True
     assert cfg.database_path == "/var/lib/mower/rtabmap.db"
     assert cfg.socket_path == "/run/mower/vslam-pose.sock"
+    assert cfg.usb_max_speed == "SUPER"
+    assert cfg.ir_dot_projector_ma == 750
+    assert cfg.ir_flood_led_ma == 200
     # extrinsics defaults
     assert cfg.extrinsics.pos_x == pytest.approx(0.30)
     assert cfg.extrinsics.pos_y == pytest.approx(0.00)
@@ -139,6 +142,69 @@ def test_empty_yaml_returns_defaults(tmp_path: Path) -> None:
     cfg_path.write_text("", encoding="utf-8")
     cfg = load_vslam_config(cfg_path)
     assert cfg.odometry_strategy == "f2m"
+
+
+# ------------------------------------------------------------------
+# New fields: usb_max_speed, IR
+# ------------------------------------------------------------------
+
+
+def test_usb_max_speed_high(tmp_path: Path) -> None:
+    data = {"vslam": {"usb_max_speed": "HIGH"}}
+    cfg_path = tmp_path / "vslam.yaml"
+    cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    cfg = load_vslam_config(cfg_path)
+    assert cfg.usb_max_speed == "HIGH"
+
+
+def test_usb_max_speed_invalid(tmp_path: Path) -> None:
+    data = {"vslam": {"usb_max_speed": "TURBO"}}
+    cfg_path = tmp_path / "bad.yaml"
+    cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(VslamConfigError, match="usb_max_speed"):
+        load_vslam_config(cfg_path)
+
+
+def test_ir_dot_projector_valid_range(tmp_path: Path) -> None:
+    for val in (0, 600, 1200):
+        data = {"vslam": {"ir_dot_projector_ma": val}}
+        cfg_path = tmp_path / "vslam.yaml"
+        cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        cfg = load_vslam_config(cfg_path)
+        assert cfg.ir_dot_projector_ma == val
+
+
+def test_ir_dot_projector_over_max(tmp_path: Path) -> None:
+    data = {"vslam": {"ir_dot_projector_ma": 1201}}
+    cfg_path = tmp_path / "bad.yaml"
+    cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(VslamConfigError, match="ir_dot_projector_ma"):
+        load_vslam_config(cfg_path)
+
+
+def test_ir_flood_led_valid_range(tmp_path: Path) -> None:
+    for val in (0, 750, 1500):
+        data = {"vslam": {"ir_flood_led_ma": val}}
+        cfg_path = tmp_path / "vslam.yaml"
+        cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        cfg = load_vslam_config(cfg_path)
+        assert cfg.ir_flood_led_ma == val
+
+
+def test_ir_flood_led_over_max(tmp_path: Path) -> None:
+    data = {"vslam": {"ir_flood_led_ma": 1501}}
+    cfg_path = tmp_path / "bad.yaml"
+    cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(VslamConfigError, match="ir_flood_led_ma"):
+        load_vslam_config(cfg_path)
+
+
+def test_ir_negative_rejected(tmp_path: Path) -> None:
+    data = {"vslam": {"ir_dot_projector_ma": -1}}
+    cfg_path = tmp_path / "bad.yaml"
+    cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(VslamConfigError, match="ir_dot_projector_ma"):
+        load_vslam_config(cfg_path)
 
 
 # ------------------------------------------------------------------

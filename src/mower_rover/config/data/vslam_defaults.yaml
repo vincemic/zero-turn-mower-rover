@@ -4,7 +4,7 @@
 
 vslam:
   odometry_strategy: f2m        # Frame-to-Map (most robust for outdoor)
-  stereo_resolution: 400p       # OAK-D Pro stereo pair resolution
+  stereo_resolution: 800p       # OAK-D Pro stereo pair resolution (USB 3.x required)
   stereo_fps: 30                # Stereo frame rate
   imu_rate_hz: 200              # OAK-D Pro IMU sample rate
   pose_output_rate_hz: 20       # Pose output rate to bridge via socket
@@ -12,6 +12,9 @@ vslam:
   loop_closure: true            # Enable appearance-based loop closure
   database_path: /var/lib/mower/rtabmap.db   # Session map storage
   socket_path: /run/mower/vslam-pose.sock    # IPC Unix domain socket
+  usb_max_speed: SUPER          # SUPER (5 Gbps), HIGH (480 Mbps fallback), SUPER_PLUS (10 Gbps)
+  ir_dot_projector_ma: 750      # IR dot projector current 0–1200 mA (OAK-D Pro only)
+  ir_flood_led_ma: 200          # IR flood LED current 0–1500 mA (OAK-D Pro only)
   extrinsics:
     pos_x: 0.30    # Camera forward offset from Pixhawk (m) — field measured
     pos_y: 0.00    # Camera lateral offset (m)

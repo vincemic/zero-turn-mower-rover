@@ -58,7 +58,7 @@ class VslamConfig:
     """Full VSLAM runtime configuration."""
 
     odometry_strategy: str = "f2m"
-    stereo_resolution: str = "400p"
+    stereo_resolution: str = "800p"
     stereo_fps: int = 30
     imu_rate_hz: int = 200
     pose_output_rate_hz: int = 20
@@ -66,6 +66,9 @@ class VslamConfig:
     loop_closure: bool = True
     database_path: str = "/var/lib/mower/rtabmap.db"
     socket_path: str = "/run/mower/vslam-pose.sock"
+    usb_max_speed: str = "SUPER"
+    ir_dot_projector_ma: int = 750
+    ir_flood_led_ma: int = 200
     extrinsics: Extrinsics = None  # type: ignore[assignment]
     bridge: BridgeConfig = None  # type: ignore[assignment]
 
@@ -87,6 +90,9 @@ class VslamConfig:
                 "loop_closure": self.loop_closure,
                 "database_path": self.database_path,
                 "socket_path": self.socket_path,
+                "usb_max_speed": self.usb_max_speed,
+                "ir_dot_projector_ma": self.ir_dot_projector_ma,
+                "ir_flood_led_ma": self.ir_flood_led_ma,
                 "extrinsics": asdict(self.extrinsics),
             },
             "bridge": asdict(self.bridge),
@@ -99,6 +105,7 @@ class VslamConfig:
 
 _VALID_ODOMETRY = {"f2m", "f2f", "fovis", "viso2", "orbslam2"}
 _VALID_RESOLUTIONS = {"400p", "480p", "720p", "800p"}
+_VALID_USB_SPEEDS = {"HIGH", "SUPER", "SUPER_PLUS"}
 
 
 def _coerce_extrinsics(raw: Any) -> Extrinsics:
@@ -212,6 +219,24 @@ def _coerce(raw: dict[str, Any]) -> VslamConfig:
             f"socket_path must be a string, got {type(socket_path).__name__}"
         )
 
+    usb_max_speed = vslam_raw.get("usb_max_speed", "SUPER")
+    if usb_max_speed not in _VALID_USB_SPEEDS:
+        raise VslamConfigError(
+            f"usb_max_speed must be one of {_VALID_USB_SPEEDS}, got {usb_max_speed!r}"
+        )
+
+    ir_dot_projector_ma = vslam_raw.get("ir_dot_projector_ma", 750)
+    if not isinstance(ir_dot_projector_ma, int) or not (0 <= ir_dot_projector_ma <= 1200):
+        raise VslamConfigError(
+            f"ir_dot_projector_ma must be int 0\u20131200, got {ir_dot_projector_ma!r}"
+        )
+
+    ir_flood_led_ma = vslam_raw.get("ir_flood_led_ma", 200)
+    if not isinstance(ir_flood_led_ma, int) or not (0 <= ir_flood_led_ma <= 1500):
+        raise VslamConfigError(
+            f"ir_flood_led_ma must be int 0\u20131500, got {ir_flood_led_ma!r}"
+        )
+
     extrinsics = _coerce_extrinsics(vslam_raw.get("extrinsics"))
     bridge = _coerce_bridge(raw.get("bridge"))
 
@@ -225,6 +250,9 @@ def _coerce(raw: dict[str, Any]) -> VslamConfig:
         loop_closure=loop_closure,
         database_path=database_path,
         socket_path=socket_path,
+        usb_max_speed=usb_max_speed,
+        ir_dot_projector_ma=ir_dot_projector_ma,
+        ir_flood_led_ma=ir_flood_led_ma,
         extrinsics=extrinsics,
         bridge=bridge,
     )

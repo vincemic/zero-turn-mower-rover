@@ -290,7 +290,8 @@ harden_usb_params() {
     fi
     # Disable LPM (U1/U2) for Movidius MyriadX — the Realtek hub on the AGX
     # Orin carrier board drops the SuperSpeed link after ~200ms without this.
-    if ! grep -q 'usbcore\.quirks=03e7:2485:gk' "$extlinux"; then
+    # Both bootloader (2485) and booted firmware (f63b) PIDs need NO_LPM.
+    if ! grep -q 'usbcore\.quirks=03e7:2485:gk,03e7:f63b:gk' "$extlinux"; then
         need_quirks=true
     fi
 
@@ -309,7 +310,13 @@ harden_usb_params() {
         sed -i '/^\s*APPEND / s/$/ usbcore.usbfs_memory_mb=1000/' "$extlinux"
     fi
     if $need_quirks; then
-        sed -i '/^\s*APPEND / s/$/ usbcore.quirks=03e7:2485:gk/' "$extlinux"
+        # Upgrade old single-PID quirk to dual-PID if present
+        if grep -q 'usbcore\.quirks=03e7:2485:gk' "$extlinux" && \
+           ! grep -q 'usbcore\.quirks=03e7:2485:gk,03e7:f63b:gk' "$extlinux"; then
+            sed -i 's|usbcore.quirks=03e7:2485:gk|usbcore.quirks=03e7:2485:gk,03e7:f63b:gk|' "$extlinux"
+        else
+            sed -i '/^\s*APPEND / s/$/ usbcore.quirks=03e7:2485:gk,03e7:f63b:gk/' "$extlinux"
+        fi
     fi
 
     echo "  extlinux diff:"

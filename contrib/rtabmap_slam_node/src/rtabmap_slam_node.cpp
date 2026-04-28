@@ -83,9 +83,12 @@ struct SlamConfig {
     std::string socket_path = "/run/mower/vslam-pose.sock";
 
     /* Camera. */
-    std::string stereo_resolution = "400p";
+    std::string stereo_resolution = "800p";
     int stereo_fps = 30;
     int imu_rate_hz = 200;
+    std::string usb_max_speed = "SUPER";
+    int ir_dot_projector_ma = 750;
+    int ir_flood_led_ma = 200;
 
     /* RTAB-Map. */
     std::string odometry_strategy = "f2m";
@@ -135,6 +138,12 @@ static SlamConfig load_config(const std::string &path) {
             cfg.loop_closure = vslam["loop_closure"].as<bool>();
         if (vslam["database_path"])
             cfg.database_path = vslam["database_path"].as<std::string>();
+        if (vslam["usb_max_speed"])
+            cfg.usb_max_speed = vslam["usb_max_speed"].as<std::string>();
+        if (vslam["ir_dot_projector_ma"])
+            cfg.ir_dot_projector_ma = vslam["ir_dot_projector_ma"].as<int>();
+        if (vslam["ir_flood_led_ma"])
+            cfg.ir_flood_led_ma = vslam["ir_flood_led_ma"].as<int>();
 
         std::cerr << "[config] Loaded from " << path << std::endl;
     } catch (const YAML::Exception &e) {
@@ -179,16 +188,23 @@ static DaiPipeline create_depthai_pipeline(const SlamConfig &cfg) {
 
     /* Create device first, then pass to pipeline.
      *
-     * Force USB 2.0 (HIGH) speed via BoardConfig to prevent the
-     * MyriadX from re-enumerating across USB buses on Jetson AGX
-     * Orin.  The bootloader attaches via a USB 2.0 hub on bus 1;
-     * if allowed to negotiate SuperSpeed the booted device
-     * reappears on bus 2 and the XLink search fails.  400p stereo
-     * + IMU fits well within USB 2.0 bandwidth (~30 MB/s vs
-     * 35-40 MB/s practical).
+     * Default USB 3.x SuperSpeed (5 Gbps).  Requires the kernel
+     * quirk usbcore.quirks=03e7:2485:gk,03e7:f63b:gk to disable
+     * LPM for both bootloader and booted MyriadX PIDs — without
+     * this the Realtek hub on the AGX Orin carrier board drops
+     * the SuperSpeed link.  Validated 2026-04-27 with Waveshare
+     * 4-Ch USB 3.2 Gen1 powered hub.
+     *
+     * Set usb_max_speed: HIGH in vslam.yaml to fall back to
+     * USB 2.0 (480 Mbps) if needed without recompiling.
      */
     dai::DeviceBase::Config dev_cfg;
-    dev_cfg.board.usb.maxSpeed = dai::UsbSpeed::HIGH;
+    dai::UsbSpeed usb_speed = dai::UsbSpeed::SUPER;
+    if (cfg.usb_max_speed == "HIGH")
+        usb_speed = dai::UsbSpeed::HIGH;
+    else if (cfg.usb_max_speed == "SUPER_PLUS")
+        usb_speed = dai::UsbSpeed::SUPER_PLUS;
+    dev_cfg.board.usb.maxSpeed = usb_speed;
     result.device = std::make_shared<dai::Device>(dev_cfg);
     std::cerr << "[depthai] Device opened: "
               << result.device->getDeviceId() << std::endl;
@@ -248,6 +264,22 @@ static DaiPipeline create_depthai_pipeline(const SlamConfig &cfg) {
     /* Start the pipeline. */
     result.pipeline->start();
     std::cerr << "[depthai] Pipeline started" << std::endl;
+
+    /* IR illumination (OAK-D Pro only — no-op on non-Pro). */
+    if (cfg.ir_dot_projector_ma > 0) {
+        float intensity = static_cast<float>(cfg.ir_dot_projector_ma) / 1200.0f;
+        result.device->setIrLaserDotProjectorIntensity(intensity);
+        std::cerr << "[depthai] IR dot projector: "
+                  << cfg.ir_dot_projector_ma << " mA (" 
+                  << (intensity * 100.0f) << "%)" << std::endl;
+    }
+    if (cfg.ir_flood_led_ma > 0) {
+        float intensity = static_cast<float>(cfg.ir_flood_led_ma) / 1500.0f;
+        result.device->setIrFloodLightIntensity(intensity);
+        std::cerr << "[depthai] IR flood LED: "
+                  << cfg.ir_flood_led_ma << " mA (" 
+                  << (intensity * 100.0f) << "%)" << std::endl;
+    }
 
     return result;
 }
