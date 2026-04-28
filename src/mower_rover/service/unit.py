@@ -40,7 +40,7 @@ Environment=MOWER_CORRELATION_ID=daemon
 User={user}
 WorkingDirectory={home_dir}
 WatchdogSec={watchdog_sec}
-{runtime_directory}Restart=on-failure
+{timeout_start_sec}{runtime_directory}Restart=on-failure
 RestartSec=5
 
 [Install]
@@ -60,7 +60,7 @@ ExecStart={exec_start}
 Environment=MOWER_CORRELATION_ID=daemon
 WorkingDirectory={home_dir}
 WatchdogSec={watchdog_sec}
-{runtime_directory}Restart=on-failure
+{timeout_start_sec}{runtime_directory}Restart=on-failure
 RestartSec=5
 
 [Install]
@@ -78,6 +78,7 @@ def generate_service_unit(
     after: str = "network.target",
     binds_to: str | None = None,
     watchdog_sec: int = 30,
+    timeout_start_sec: int | None = None,
     runtime_directory: str | None = None,
 ) -> str:
     """Return a systemd unit file from the generic template.
@@ -88,6 +89,9 @@ def generate_service_unit(
     runtime_dir_line = (
         f"RuntimeDirectory={runtime_directory}\n" if runtime_directory else ""
     )
+    timeout_line = (
+        f"TimeoutStartSec={timeout_start_sec}\n" if timeout_start_sec else ""
+    )
     template = _GENERIC_USER_TEMPLATE if user_level else _GENERIC_SYSTEM_TEMPLATE
     return template.format(
         description=description,
@@ -97,6 +101,7 @@ def generate_service_unit(
         after=after,
         binds_to=binds_to_line,
         watchdog_sec=watchdog_sec,
+        timeout_start_sec=timeout_line,
         runtime_directory=runtime_dir_line,
     )
 
@@ -143,6 +148,7 @@ def generate_vslam_unit_file(
         after="network.target mower-health.service",
         binds_to=None,
         watchdog_sec=30,
+        timeout_start_sec=300,
         runtime_directory="mower",
     )
 

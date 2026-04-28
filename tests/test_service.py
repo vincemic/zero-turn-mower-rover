@@ -324,6 +324,25 @@ class TestGenerateServiceUnit:
         )
         assert "WatchdogSec=60" in content
 
+    def test_timeout_start_sec_omitted_by_default(self) -> None:
+        content = generate_service_unit(
+            description="Test",
+            exec_start="/usr/bin/test",
+            user="u",
+            home_dir="/home/u",
+        )
+        assert "TimeoutStartSec" not in content
+
+    def test_timeout_start_sec_custom(self) -> None:
+        content = generate_service_unit(
+            description="Test",
+            exec_start="/usr/bin/test",
+            user="u",
+            home_dir="/home/u",
+            timeout_start_sec=300,
+        )
+        assert "TimeoutStartSec=300" in content
+
 
 # ---------------------------------------------------------------------------
 # generate_vslam_unit_file
@@ -367,6 +386,13 @@ class TestGenerateVslamUnitFile:
             home_dir="/home/mower",
         )
         assert "WatchdogSec=30" in content
+
+    def test_timeout_start_sec(self) -> None:
+        content = generate_vslam_unit_file(
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "TimeoutStartSec=300" in content
 
     def test_description(self) -> None:
         content = generate_vslam_unit_file(
