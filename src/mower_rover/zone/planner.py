@@ -324,6 +324,12 @@ def generate_waypoints(zone: ZoneConfig) -> list[LatLon]:
     """
     logger.info(f"Generating waypoints for zone {zone.zone_id}: {zone.name}")
     
+    # Guard against zero or negative cutting width (would cause infinite loop)
+    if zone.coverage.cutting_width_in <= 0:
+        raise PlannerError(
+            f"cutting_width_in must be positive, got {zone.coverage.cutting_width_in}"
+        )
+    
     try:
         # Initialize geodetic projector
         projector = GeodeticProjector(zone.boundary)
