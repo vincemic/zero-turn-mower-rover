@@ -1,5 +1,9 @@
 # Zero-Turn Mower Rover
 
+![Husqvarna Z254 Zero-Turn Mower](docs/images/husqvarna-z254.webp)
+
+[![Mower in action](https://img.shields.io/badge/▶_Watch-Mower_in_Action-red?logo=youtube)](https://youtube.com/shorts/XBVs-bLQMFM?si=tykpu-UtJFp_STtF)
+
 CLI tooling suite for converting a Husqvarna Z254 zero-turn mower into an autonomous RTK-mowing robot.
 
 This is **not** the autopilot firmware, **not** the physical build, and **not** a replacement for Mission Planner / QGroundControl. It fills the gaps between existing tools (ArduPilot, u-center, DepthAI, etc.) for a single operator working in a 4-acre yard.
