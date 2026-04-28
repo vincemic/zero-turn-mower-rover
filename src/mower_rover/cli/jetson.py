@@ -18,6 +18,7 @@ from __future__ import annotations
 import json as _json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -37,6 +38,11 @@ from mower_rover.config.jetson import (
     DEFAULT_JETSON_CONFIG_PATH,
     JetsonConfigError,
     load_jetson_config,
+)
+from mower_rover.config.vslam import (
+    DEFAULT_VSLAM_CONFIG_PATH,
+    load_vslam_config,
+    save_vslam_config,
 )
 from mower_rover.health.disk import read_disk_usage
 from mower_rover.health.power import PowerState, read_power_state
@@ -79,6 +85,9 @@ vslam_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(vslam_app, name="vslam")
+
+zone_app = typer.Typer(name="zone", help="Multi-zone lawn management.", no_args_is_help=True)
+app.add_typer(zone_app, name="zone")
 
 
 @app.callback()
@@ -770,6 +779,176 @@ def vslam_bridge_stop_command(
     log.info("bridge_stop", cmd=cmd, user_level=level)
     subprocess.run(cmd, check=True)
     typer.echo("VSLAM bridge service stopped.")
+
+
+# --- zone -------------------------------------------------------------------
+
+
+@zone_app.command("activate")
+def zone_activate_command(
+    ctx: typer.Context,
+    zone_id: str = typer.Argument(..., help="Zone identifier (e.g., 'ne', 'south')"),
+    slam_mode: str = typer.Option(
+        "auto", "--slam-mode", help="SLAM mode: 'auto', 'mapping', or 'localization'"
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Activate a zone and configure VSLAM for that zone."""
+    log = get_logger("cli-jetson").bind(op="zone_activate", zone_id=zone_id)
+    
+    # Validate zone_id format: ^[a-z][a-z0-9_-]{0,31}$
+    if not re.match(r"^[a-z][a-z0-9_-]{0,31}$", zone_id):
+        error_msg = f"Invalid zone_id format: '{zone_id}'. Must start with lowercase letter, contain only lowercase letters, numbers, underscores, or hyphens, and be 1-32 characters long."
+        log.error("invalid_zone_id", zone_id=zone_id)
+        if json_out:
+            typer.echo(_json.dumps({"error": error_msg}, indent=2))
+        else:
+            typer.echo(f"ERROR: {error_msg}", err=True)
+        raise typer.Exit(code=1)
+
+    # Validate slam_mode
+    if slam_mode not in ("auto", "mapping", "localization"):
+        error_msg = f"Invalid slam_mode: '{slam_mode}'. Must be 'auto', 'mapping', or 'localization'."
+        log.error("invalid_slam_mode", slam_mode=slam_mode)
+        if json_out:
+            typer.echo(_json.dumps({"error": error_msg}, indent=2))
+        else:
+            typer.echo(f"ERROR: {error_msg}", err=True)
+        raise typer.Exit(code=1)
+
+    # Create zone directory
+    zone_dir = Path(f"/var/lib/mower/zones/{zone_id}")
+    zone_dir.mkdir(parents=True, exist_ok=True)
+    log.info("zone_directory_created", zone_dir=str(zone_dir))
+
+    # Determine actual SLAM mode
+    db_path = zone_dir / "rtabmap.db"
+    if slam_mode == "auto":
+        actual_slam_mode = "localization" if db_path.exists() else "mapping"
+    else:
+        actual_slam_mode = slam_mode
+
+    log.info("slam_mode_determined", requested=slam_mode, actual=actual_slam_mode, db_exists=db_path.exists())
+
+    try:
+        # Load current VSLAM config
+        vslam_config = load_vslam_config()
+        
+        # Update config
+        vslam_config.database_path = db_path.as_posix()
+        vslam_config.slam_mode = actual_slam_mode
+        
+        # Save updated config
+        save_vslam_config(vslam_config)
+        log.info("vslam_config_updated", database_path=str(db_path), slam_mode=actual_slam_mode)
+        
+        # Restart VSLAM services
+        for service_name in [VSLAM_UNIT_NAME, VSLAM_BRIDGE_UNIT_NAME]:
+            cmd = ["systemctl", "restart", f"{service_name}.service"]
+            log.info("restarting_service", service=service_name, cmd=cmd)
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                log.error("service_restart_failed", service=service_name, 
+                         returncode=result.returncode, stderr=result.stderr)
+                error_msg = f"Failed to restart {service_name}.service: {result.stderr}"
+                if json_out:
+                    typer.echo(_json.dumps({"error": error_msg}, indent=2))
+                else:
+                    typer.echo(f"ERROR: {error_msg}", err=True)
+                raise typer.Exit(code=1)
+        
+        log.info("zone_activated_successfully", zone_id=zone_id, slam_mode=actual_slam_mode)
+        
+        if json_out:
+            typer.echo(_json.dumps({
+                "zone_id": zone_id,
+                "slam_mode": actual_slam_mode,
+                "database_path": db_path.as_posix(),
+                "status": "ok"
+            }, indent=2))
+        else:
+            typer.echo(f"Zone '{zone_id}' activated successfully.")
+            typer.echo(f"SLAM mode: {actual_slam_mode}")
+            typer.echo(f"Database path: {db_path}")
+            typer.echo("VSLAM services restarted.")
+
+    except Exception as e:
+        log.error("zone_activation_failed", zone_id=zone_id, error=str(e))
+        error_msg = f"Failed to activate zone '{zone_id}': {e}"
+        if json_out:
+            typer.echo(_json.dumps({"error": error_msg}, indent=2))
+        else:
+            typer.echo(f"ERROR: {error_msg}", err=True)
+        raise typer.Exit(code=1)
+
+
+@zone_app.command("status")
+def zone_status_command(
+    ctx: typer.Context,
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Show current zone status and VSLAM service status."""
+    log = get_logger("cli-jetson").bind(op="zone_status")
+    
+    try:
+        # Load current VSLAM config
+        vslam_config = load_vslam_config()
+        
+        # Extract zone_id from database_path
+        # Look for pattern: /var/lib/mower/zones/{zone_id}/rtabmap.db
+        db_path = Path(vslam_config.database_path)
+        zone_id = None
+        db_size_mb = 0
+        
+        # Check if path matches zone pattern
+        path_parts = db_path.parts
+        if len(path_parts) >= 3 and "zones" in path_parts:
+            zones_idx = path_parts.index("zones")
+            if zones_idx + 1 < len(path_parts):
+                zone_id = path_parts[zones_idx + 1]
+        
+        # Get DB file size if it exists
+        if db_path.exists():
+            db_size_bytes = db_path.stat().st_size
+            db_size_mb = round(db_size_bytes / (1024 * 1024), 2)
+        
+        # Check VSLAM service status
+        result = subprocess.run(
+            ["systemctl", "is-active", f"{VSLAM_UNIT_NAME}.service"],
+            capture_output=True, text=True
+        )
+        service_active = result.returncode == 0 and result.stdout.strip() == "active"
+        
+        log.info("zone_status_collected", 
+                zone_id=zone_id, 
+                db_size_mb=db_size_mb, 
+                service_active=service_active,
+                slam_mode=vslam_config.slam_mode)
+        
+        if json_out:
+            typer.echo(_json.dumps({
+                "zone_id": zone_id,
+                "slam_mode": vslam_config.slam_mode,
+                "database_path": vslam_config.database_path,
+                "database_size_mb": db_size_mb,
+                "service_active": service_active,
+                "status": "ok"
+            }, indent=2))
+        else:
+            typer.echo(f"Active zone: {zone_id or 'unknown'}")
+            typer.echo(f"SLAM mode: {vslam_config.slam_mode}")
+            typer.echo(f"Database path: {vslam_config.database_path}")
+            typer.echo(f"Database size: {db_size_mb} MB")
+            typer.echo(f"VSLAM service: {'active' if service_active else 'inactive'}")
+            
+    except Exception as e:
+        log.error("zone_status_failed", error=str(e))
+        error_msg = f"Failed to get zone status: {e}"
+        if json_out:
+            typer.echo(_json.dumps({"error": error_msg}, indent=2))
+        else:
+            typer.echo(f"ERROR: {error_msg}", err=True)
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

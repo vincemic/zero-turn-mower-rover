@@ -15,6 +15,7 @@ vslam:
   usb_max_speed: SUPER          # SUPER (5 Gbps), HIGH (480 Mbps fallback), SUPER_PLUS (10 Gbps)
   ir_dot_projector_ma: 750      # IR dot projector current 0–1200 mA (OAK-D Pro only)
   ir_flood_led_ma: 200          # IR flood LED current 0–1500 mA (OAK-D Pro only)
+  slam_mode: mapping            # "mapping" or "localization" — set by zone activate
   extrinsics:
     pos_x: 0.30    # Camera forward offset from Pixhawk (m) — field measured
     pos_y: 0.00    # Camera lateral offset (m)

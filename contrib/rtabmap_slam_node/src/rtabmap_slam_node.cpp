@@ -96,6 +96,9 @@ struct SlamConfig {
     int memory_threshold_mb = 6000;
     bool loop_closure = true;
     std::string database_path = "/var/lib/mower/rtabmap.db";
+
+    /* Zone management. */
+    std::string slam_mode = "mapping";  /* "mapping" or "localization" */
 };
 
 static SlamConfig load_config(const std::string &path) {
@@ -144,6 +147,8 @@ static SlamConfig load_config(const std::string &path) {
             cfg.ir_dot_projector_ma = vslam["ir_dot_projector_ma"].as<int>();
         if (vslam["ir_flood_led_ma"])
             cfg.ir_flood_led_ma = vslam["ir_flood_led_ma"].as<int>();
+        if (vslam["slam_mode"])
+            cfg.slam_mode = vslam["slam_mode"].as<std::string>();
 
         std::cerr << "[config] Loaded from " << path << std::endl;
     } catch (const YAML::Exception &e) {
@@ -317,6 +322,15 @@ static SlamEngine create_slam_engine(const SlamConfig &cfg) {
         params.insert(rtabmap::ParametersPair(
             rtabmap::Parameters::kRGBDEnabled(), "false"));
     }
+
+    /* Localization mode: disable incremental memory, enable read-only. */
+    if (cfg.slam_mode == "localization") {
+        params.insert(rtabmap::ParametersPair(
+            rtabmap::Parameters::kMemIncrementalMemory(), "false"));
+        params.insert(rtabmap::ParametersPair(
+            rtabmap::Parameters::kMemLocalizationReadOnly(), "true"));
+    }
+    /* "mapping" mode uses defaults: IncrementalMemory=true, LocalizationReadOnly=false */
 
     SlamEngine engine;
 

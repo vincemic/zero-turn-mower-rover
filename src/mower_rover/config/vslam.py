@@ -69,6 +69,7 @@ class VslamConfig:
     usb_max_speed: str = "SUPER"
     ir_dot_projector_ma: int = 750
     ir_flood_led_ma: int = 200
+    slam_mode: str = "mapping"
     extrinsics: Extrinsics = None  # type: ignore[assignment]
     bridge: BridgeConfig = None  # type: ignore[assignment]
 
@@ -93,6 +94,7 @@ class VslamConfig:
                 "usb_max_speed": self.usb_max_speed,
                 "ir_dot_projector_ma": self.ir_dot_projector_ma,
                 "ir_flood_led_ma": self.ir_flood_led_ma,
+                "slam_mode": self.slam_mode,
                 "extrinsics": asdict(self.extrinsics),
             },
             "bridge": asdict(self.bridge),
@@ -237,6 +239,13 @@ def _coerce(raw: dict[str, Any]) -> VslamConfig:
             f"ir_flood_led_ma must be int 0\u20131500, got {ir_flood_led_ma!r}"
         )
 
+    _VALID_SLAM_MODES = {"mapping", "localization"}
+    slam_mode = vslam_raw.get("slam_mode", "mapping")
+    if slam_mode not in _VALID_SLAM_MODES:
+        raise VslamConfigError(
+            f"slam_mode must be one of {_VALID_SLAM_MODES}, got {slam_mode!r}"
+        )
+
     extrinsics = _coerce_extrinsics(vslam_raw.get("extrinsics"))
     bridge = _coerce_bridge(raw.get("bridge"))
 
@@ -253,6 +262,7 @@ def _coerce(raw: dict[str, Any]) -> VslamConfig:
         usb_max_speed=usb_max_speed,
         ir_dot_projector_ma=ir_dot_projector_ma,
         ir_flood_led_ma=ir_flood_led_ma,
+        slam_mode=slam_mode,
         extrinsics=extrinsics,
         bridge=bridge,
     )

@@ -1,0 +1,49 @@
+schema: "mower-rover.zone.v1"
+zone_id: south
+name: "South Lawn"
+description: "Large open area with minimal obstacles."
+
+home:
+  lat: 38.89200
+  lon: -77.03580
+
+rally_point:
+  lat: 38.89195
+  lon: -77.03575
+  description: "Gate entrance to south lawn"
+
+boundary:
+  - [38.89200, -77.03580]
+  - [38.89200, -77.03300]
+  - [38.89050, -77.03300]
+  - [38.89050, -77.03580]
+
+exclusion_zones:
+  - name: "garden_beds"
+    buffer_m: 0.5
+    polygon:
+      - [38.89170, -77.03450]
+      - [38.89170, -77.03420]
+      - [38.89150, -77.03420]
+      - [38.89150, -77.03450]
+
+coverage:
+  pattern: boustrophedon
+  cutting_width_in: 54
+  overlap_pct: 8
+  angle_deg: 90
+  headland_passes: 3
+  mow_speed_mps: 2.5
+  turn_speed_mps: 1.2
+
+commands:
+  fence_enable: true
+  resume_dist_m: 2.0
+  blade_engage: true
+
+slam:
+  mode: localization
+
+output:
+  waypoints_file: south.waypoints
+  geojson_file: south.geojson

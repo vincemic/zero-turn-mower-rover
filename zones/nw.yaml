@@ -1,0 +1,56 @@
+schema: "mower-rover.zone.v1"
+zone_id: nw
+name: "North West Lawn"
+description: "Sloped area with moderate tree coverage."
+
+home:
+  lat: 38.89520
+  lon: -77.03720
+
+rally_point:
+  lat: 38.89515
+  lon: -77.03715
+  description: "Path entrance to NW lawn"
+
+boundary:
+  - [38.89520, -77.03720]
+  - [38.89520, -77.03850]
+  - [38.89380, -77.03850]
+  - [38.89380, -77.03720]
+
+exclusion_zones:
+  - name: "maple_grove"
+    buffer_m: 1.5
+    polygon:
+      - [38.89490, -77.03800]
+      - [38.89490, -77.03770]
+      - [38.89460, -77.03770]
+      - [38.89460, -77.03800]
+  - name: "utility_pole"
+    buffer_m: 2.0
+    polygon:
+      - [38.89410, -77.03740]
+      - [38.89410, -77.03735]
+      - [38.89405, -77.03735]
+      - [38.89405, -77.03740]
+
+coverage:
+  pattern: boustrophedon
+  cutting_width_in: 54
+  overlap_pct: 15
+  angle_deg: 45
+  headland_passes: 1
+  mow_speed_mps: 1.5
+  turn_speed_mps: 0.8
+
+commands:
+  fence_enable: true
+  resume_dist_m: 3.0
+  blade_engage: true
+
+slam:
+  mode: localization
+
+output:
+  waypoints_file: nw.waypoints
+  geojson_file: nw.geojson

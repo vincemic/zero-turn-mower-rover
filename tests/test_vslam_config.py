@@ -199,6 +199,53 @@ def test_ir_flood_led_over_max(tmp_path: Path) -> None:
         load_vslam_config(cfg_path)
 
 
+# ------------------------------------------------------------------
+# slam_mode field
+# ------------------------------------------------------------------
+
+
+def test_slam_mode_default(tmp_path: Path) -> None:
+    cfg = load_vslam_config(tmp_path / "nonexistent.yaml")
+    assert cfg.slam_mode == "mapping"
+
+
+def test_slam_mode_mapping(tmp_path: Path) -> None:
+    data = {"vslam": {"slam_mode": "mapping"}}
+    cfg_path = tmp_path / "vslam.yaml"
+    cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    cfg = load_vslam_config(cfg_path)
+    assert cfg.slam_mode == "mapping"
+
+
+def test_slam_mode_localization(tmp_path: Path) -> None:
+    data = {"vslam": {"slam_mode": "localization"}}
+    cfg_path = tmp_path / "vslam.yaml"
+    cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    cfg = load_vslam_config(cfg_path)
+    assert cfg.slam_mode == "localization"
+
+
+def test_slam_mode_invalid(tmp_path: Path) -> None:
+    data = {"vslam": {"slam_mode": "navigation"}}
+    cfg_path = tmp_path / "bad.yaml"
+    cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(VslamConfigError, match="slam_mode"):
+        load_vslam_config(cfg_path)
+
+
+def test_slam_mode_in_to_dict() -> None:
+    cfg = VslamConfig(slam_mode="localization")
+    d = cfg.to_dict()
+    assert d["vslam"]["slam_mode"] == "localization"
+
+
+def test_slam_mode_round_trip(tmp_path: Path) -> None:
+    cfg = VslamConfig(slam_mode="localization")
+    out = save_vslam_config(cfg, tmp_path / "round.yaml")
+    reloaded = load_vslam_config(out)
+    assert reloaded.slam_mode == "localization"
+
+
 def test_ir_negative_rejected(tmp_path: Path) -> None:
     data = {"vslam": {"ir_dot_projector_ma": -1}}
     cfg_path = tmp_path / "bad.yaml"

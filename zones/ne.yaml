@@ -1,0 +1,49 @@
+schema: "mower-rover.zone.v1"
+zone_id: ne
+name: "North East Lawn"
+description: "Flat ~1.5 acre area with good GPS reception."
+
+home:
+  lat: 38.89510
+  lon: -77.03660
+
+rally_point:
+  lat: 38.89505
+  lon: -77.03655
+  description: "Driveway entrance to NE lawn"
+
+boundary:
+  - [38.89510, -77.03660]
+  - [38.89510, -77.03400]
+  - [38.89350, -77.03400]
+  - [38.89350, -77.03660]
+
+exclusion_zones:
+  - name: "oak_tree_ne"
+    buffer_m: 1.0
+    polygon:
+      - [38.89480, -77.03550]
+      - [38.89480, -77.03520]
+      - [38.89460, -77.03520]
+      - [38.89460, -77.03550]
+
+coverage:
+  pattern: boustrophedon
+  cutting_width_in: 54
+  overlap_pct: 10
+  angle_deg: 0
+  headland_passes: 2
+  mow_speed_mps: 2.0
+  turn_speed_mps: 1.0
+
+commands:
+  fence_enable: true
+  resume_dist_m: 2.5
+  blade_engage: true
+
+slam:
+  mode: localization
+
+output:
+  waypoints_file: ne.waypoints
+  geojson_file: ne.geojson

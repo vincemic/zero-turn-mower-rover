@@ -14,7 +14,7 @@ This is **not** the autopilot firmware, **not** the physical build, and **not** 
 | Steering | 2× ASMC-04A Robot Servo (12–24 V, back-driveable) |
 | Companion computer | NVIDIA Jetson AGX Orin 64 GB (JetPack 6, 50 W mode) |
 | Depth camera | Luxonis OAK-D Pro (USB, DepthAI v3) |
-| Operator control | FrSky RC transmitter (SBUS/FPort) + physical E-stop |
+| Operator control | FrSky Taranis X9D Plus (OpenTX) transmitter (SBUS/FPort) + physical E-stop |
 
 See [docs/vision/001-zero-turn-mower-rover.md](docs/vision/001-zero-turn-mower-rover.md) and [docs/research/001-mvp-bringup-rtk-mowing.md](docs/research/001-mvp-bringup-rtk-mowing.md) for full details.
 
