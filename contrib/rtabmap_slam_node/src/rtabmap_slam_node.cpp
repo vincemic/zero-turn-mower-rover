@@ -323,12 +323,12 @@ static SlamEngine create_slam_engine(const SlamConfig &cfg) {
             rtabmap::Parameters::kRGBDEnabled(), "false"));
     }
 
-    /* Localization mode: disable incremental memory, enable read-only. */
+    /* Localization mode: disable incremental memory, don't save localization data. */
     if (cfg.slam_mode == "localization") {
         params.insert(rtabmap::ParametersPair(
             rtabmap::Parameters::kMemIncrementalMemory(), "false"));
         params.insert(rtabmap::ParametersPair(
-            rtabmap::Parameters::kMemLocalizationReadOnly(), "true"));
+            rtabmap::Parameters::kMemLocalizationDataSaved(), "false"));
     }
     /* "mapping" mode uses defaults: IncrementalMemory=true, LocalizationReadOnly=false */
 

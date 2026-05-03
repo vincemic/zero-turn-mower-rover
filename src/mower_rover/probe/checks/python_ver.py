@@ -10,8 +10,11 @@ from mower_rover.probe.registry import Severity, register
 
 @register("python_ver", severity=Severity.CRITICAL, depends_on=("jetpack_version",))
 def check_python_ver(sysroot: Path) -> tuple[bool, str]:
-    """Verify Python 3.11+ is available on the system."""
-    for cmd in ("python3.11", "python3"):
+    """Verify Python 3.11+ is available on the system or via uv."""
+    home = Path.home()
+    uv_pythons = sorted(home.glob(".local/share/uv/python/cpython-3.*/bin/python3.*"))
+    candidates = ["python3.11", "python3"] + [str(p) for p in uv_pythons]
+    for cmd in candidates:
         try:
             result = subprocess.run(
                 [cmd, "--version"],

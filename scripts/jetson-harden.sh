@@ -129,6 +129,14 @@ harden_openblas() {
         echo 'OPENBLAS_CORETYPE=ARMV8' >> /etc/environment
         STATUS[openblas]="applied"
     fi
+
+    # Ensure /usr/local/cuda/bin is on the system PATH for nvcc.
+    if grep -q '/usr/local/cuda/bin' /etc/environment; then
+        true  # already present
+    elif [ -d /usr/local/cuda/bin ]; then
+        sed -i 's|^PATH="\(.*\)"|PATH="/usr/local/cuda/bin:\1"|' /etc/environment
+        STATUS[openblas]="applied (+ CUDA PATH)"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -359,7 +367,7 @@ JCLOCKS
 # 13. RTAB-Map — build from source with CUDA/OpenCV
 # ---------------------------------------------------------------------------
 harden_rtabmap() {
-    local tag="0.21.6"
+    local tag="0.21.6-rolling"
     local src_dir="/opt/rtabmap-src"
     local marker_dir="/usr/local/share/mower-build"
     local marker="${marker_dir}/rtabmap.json"
@@ -536,7 +544,7 @@ print_summary() {
         "oakd_udev:OAK-D udev rules (80-oakd-usb.rules)"
         "usb_params:USB kernel params (autosuspend, usbfs_memory_mb)"
         "jetson_clocks:jetson_clocks service (lock clocks at boot)"
-        "rtabmap:RTAB-Map 0.21.6 (source build, CUDA+OpenCV)"
+        "rtabmap:RTAB-Map 0.21.6-rolling (source build, CUDA+OpenCV)"
         "depthai_core:depthai-core v3.5.0 C++ SDK (source build)"
         "slam_node:RTAB-Map SLAM node binary (custom C++)"
     )
@@ -581,8 +589,8 @@ main() {
         exit 1
     fi
 
-    echo "[1/${total}] Headless mode..."
-    harden_headless
+    echo "[1/${total}] Headless mode... SKIPPED (keeping GUI for post-flash debugging)"
+    # harden_headless  # Temporarily skipped — re-enable for field deployment
 
     echo "[2/${total}] Disabling unnecessary services..."
     harden_services

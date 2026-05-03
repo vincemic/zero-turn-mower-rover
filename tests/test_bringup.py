@@ -825,7 +825,7 @@ class TestRestoreBinariesCheck:
         import json
 
         mock_client.run.side_effect = [
-            _ssh_ok(stdout=json.dumps({"version": "0.21.6"})),
+            _ssh_ok(stdout=json.dumps({"version": "0.21.6-rolling"})),
             _ssh_ok(stdout=json.dumps({"version": "v3.5.0"})),
             _ssh_ok(stdout=json.dumps({"version": "1.0.0"})),
         ]
@@ -897,7 +897,7 @@ class TestRunRestoreBinaries:
 
 class TestBuildRtabmapCheck:
     def test_returns_true_when_version_matches(self, mock_client: MagicMock) -> None:
-        mock_client.run.return_value = _ssh_ok(stdout='{"version": "0.21.6"}')
+        mock_client.run.return_value = _ssh_ok(stdout='{"version": "0.21.6-rolling"}')
         assert _build_rtabmap_check(mock_client) is True
 
     def test_returns_false_when_version_wrong(self, mock_client: MagicMock) -> None:
@@ -1129,6 +1129,7 @@ class TestStepOrdering:
             "harden-os",
             "reboot-and-wait",
             "restore-binaries",
+            "install-build-deps",
             "build-rtabmap",
             "build-depthai",
             "build-slam-node",
@@ -1143,10 +1144,10 @@ class TestStepOrdering:
             "final-verify",
         )
 
-    def test_all_18_steps_present(self) -> None:
+    def test_all_19_steps_present(self) -> None:
         from mower_rover.cli.bringup import BRINGUP_STEPS
 
-        assert len(BRINGUP_STEPS) == 18
+        assert len(BRINGUP_STEPS) == 19
         names = tuple(s.name for s in BRINGUP_STEPS)
         assert names == STEP_NAMES
 
@@ -1286,12 +1287,12 @@ class TestRunFinalVerify:
 
 
 # ---------------------------------------------------------------------------
-# 5.6 — Integration tests (full 18-step pipeline)
+# 5.6 — Integration tests (full 19-step pipeline)
 # ---------------------------------------------------------------------------
 
 
 class TestBringupIntegrationAllSkip:
-    """All 18 check() functions return True → every step skips."""
+    """All 19 check() functions return True → every step skips."""
 
     def test_all_steps_skip(self, runner: CliRunner, tmp_path: Path) -> None:
         import contextlib
@@ -1316,6 +1317,7 @@ class TestBringupIntegrationAllSkip:
             "mower_rover.cli.bringup._harden_done": True,
             "mower_rover.cli.bringup._reboot_check": True,
             "mower_rover.cli.bringup._restore_binaries_check": True,
+            "mower_rover.cli.bringup._build_deps_check": True,
             "mower_rover.cli.bringup._build_rtabmap_check": True,
             "mower_rover.cli.bringup._build_depthai_check": True,
             "mower_rover.cli.bringup._build_slam_node_check": True,
@@ -1349,7 +1351,7 @@ class TestBringupIntegrationAllSkip:
             )
         assert result.exit_code == 0, result.output
         assert "Bringup complete" in result.output
-        assert result.output.count("Already satisfied") == 18
+        assert result.output.count("Already satisfied") == 19
 
 
 class TestBringupIntegrationFromStep:
@@ -1420,6 +1422,7 @@ class TestBringupIntegrationContinueOnError:
             "mower_rover.cli.bringup._harden_done": True,
             "mower_rover.cli.bringup._reboot_check": True,
             "mower_rover.cli.bringup._restore_binaries_check": True,
+            "mower_rover.cli.bringup._build_deps_check": True,
             "mower_rover.cli.bringup._build_rtabmap_check": True,
             "mower_rover.cli.bringup._build_depthai_check": True,
             "mower_rover.cli.bringup._build_slam_node_check": True,

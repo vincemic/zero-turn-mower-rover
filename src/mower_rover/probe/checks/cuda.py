@@ -11,17 +11,22 @@ from mower_rover.probe.registry import Severity, register
 @register("cuda", severity=Severity.CRITICAL, depends_on=("jetpack_version",))
 def check_cuda(sysroot: Path) -> tuple[bool, str]:
     """Verify CUDA 12.x is installed via ``nvcc --version``."""
-    try:
-        result = subprocess.run(
-            ["nvcc", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False, "CUDA not found"
+    nvcc_candidates = ["nvcc", "/usr/local/cuda/bin/nvcc"]
+    result = None
+    for nvcc in nvcc_candidates:
+        try:
+            result = subprocess.run(
+                [nvcc, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                break
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
 
-    if result.returncode != 0:
+    if result is None or result.returncode != 0:
         return False, "CUDA not found"
 
     # Look for "release 12." in nvcc output.
