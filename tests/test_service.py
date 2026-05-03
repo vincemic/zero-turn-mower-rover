@@ -21,12 +21,15 @@ from mower_rover.config.jetson import (
 from mower_rover.safety.confirm import SafetyContext
 from mower_rover.service.unit import (
     UNIT_NAME,
+    VSLAM_BRIDGE_UNIT_NAME,
     VSLAM_UNIT_NAME,
+    _cleanup_user_unit,
     generate_service_unit,
     generate_unit_file,
     generate_vslam_bridge_unit_file,
     generate_vslam_unit_file,
     install_service,
+    install_vslam_bridge_service,
     install_vslam_service,
     uninstall_service,
     uninstall_vslam_service,
@@ -181,10 +184,13 @@ class TestInstallService:
         assert "WatchdogSec=30" in content
         assert "User=" not in content  # user-level units must not set User=
 
-        mock_run.assert_called_once()
-        args = mock_run.call_args[0][0]
-        assert "daemon-reload" in args
-        assert "--user" in args
+        # Two calls now: daemon-reload + enable.
+        assert mock_run.call_count == 2
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert any("daemon-reload" in c for c in calls)
+        assert any("enable" in c for c in calls)
+        for c in calls:
+            assert "--user" in c
 
     def test_install_system_level_no_user_flag(self, tmp_path: Path) -> None:
         ctx = SafetyContext(dry_run=False, assume_yes=True)
@@ -200,9 +206,12 @@ class TestInstallService:
         ):
             install_service(ctx, user_level=False)
 
-        args = mock_run.call_args[0][0]
-        assert "--user" not in args
-        assert "daemon-reload" in args
+        assert mock_run.call_count == 2
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        for c in calls:
+            assert "--user" not in c
+        assert any("daemon-reload" in c for c in calls)
+        assert any("enable" in c for c in calls)
 
 
 # ---------------------------------------------------------------------------
@@ -503,9 +512,10 @@ class TestInstallVslamService:
         assert "WatchdogSec=30" in content
         assert "User=" not in content
 
-        mock_run.assert_called_once()
-        args = mock_run.call_args[0][0]
-        assert "daemon-reload" in args
+        assert mock_run.call_count == 2
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert any("daemon-reload" in c for c in calls)
+        assert any("enable" in c for c in calls)
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +696,8 @@ class TestJetsonConfigServiceFields:
     def test_defaults(self) -> None:
         cfg = JetsonConfig()
         assert cfg.health_interval_s == 60
-        assert cfg.service_user_level is True
+        # System-level is the production default after Phase 1 of plan 014.
+        assert cfg.service_user_level is False
 
     def test_round_trip(self, tmp_path: Path) -> None:
         target = tmp_path / "jetson.yaml"
@@ -703,7 +714,8 @@ class TestJetsonConfigServiceFields:
         target.write_text(yaml.safe_dump({"oakd_required": True}), encoding="utf-8")
         cfg = load_jetson_config(target)
         assert cfg.health_interval_s == 60
-        assert cfg.service_user_level is True
+        # System-level is the production default after Phase 1 of plan 014.
+        assert cfg.service_user_level is False
 
     def test_rejects_non_positive_interval(self, tmp_path: Path) -> None:
         target = tmp_path / "jetson.yaml"
@@ -728,3 +740,288 @@ class TestJetsonConfigServiceFields:
         target.write_text(yaml.safe_dump({"service_user_level": "yes"}), encoding="utf-8")
         with pytest.raises(JetsonConfigError, match="service_user_level must be bool"):
             load_jetson_config(target)
+
+
+# ---------------------------------------------------------------------------
+# User-level install path coverage (Phase 1 step 1.7 of plan 014)
+#
+# After flipping JetsonConfig.service_user_level default to False, the
+# user-level install path must remain fully exercised. Each of the three
+# install_* functions is invoked with user_level=True plus explicit
+# target_user / target_home, and the following are asserted:
+#   (a) the unit file is written to ~/.config/systemd/user/<name>.service
+#   (b) `systemctl --user enable <name>.service` is in the call sequence
+#   (c) _cleanup_user_unit is NEVER invoked from inside install_*
+#   (d) when the unit template renders a `User=` line (system tier only),
+#       it matches the target user — verified here on the user-level path
+#       by asserting the line is absent (per the existing convention).
+# ---------------------------------------------------------------------------
+
+
+class TestUserLevelInstallPathCoverage:
+    """Step 1.7 of plan 014 — keep the user-level path covered after default flip."""
+
+    def _common_patches(
+        self,
+        *,
+        fake_home: Path,
+        fake_dir: Path,
+        target_user: str,
+    ) -> list:
+        # _cleanup_user_unit is patched as an attribute lookup; if anything
+        # inside install_* ever calls it, the spy's call_count rises.
+        return [
+            patch("mower_rover.service.unit.unit_dir", return_value=fake_dir),
+            patch(
+                "mower_rover.service.unit.shutil.which",
+                return_value="/usr/bin/mower-jetson",
+            ),
+            patch(
+                "mower_rover.service.unit.getpass.getuser",
+                return_value="root",  # simulate sudo elevation
+            ),
+            patch("mower_rover.service.unit.Path.home", return_value=fake_home),
+            patch(
+                "mower_rover.service.unit.load_jetson_config",
+                return_value=JetsonConfig(),
+            ),
+        ]
+
+    def test_install_service_user_level(self, tmp_path: Path) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_home = tmp_path / "home" / "alice"
+        fake_dir = fake_home / ".config" / "systemd" / "user"
+        target_user = "alice"
+        target_home = str(fake_home)
+
+        patches = self._common_patches(
+            fake_home=fake_home, fake_dir=fake_dir, target_user=target_user,
+        )
+        cleanup_spy = MagicMock(return_value=False)
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patch("mower_rover.service.unit._cleanup_user_unit", cleanup_spy), \
+             patch("mower_rover.service.unit.subprocess.run") as mock_run:
+            install_service(
+                ctx,
+                user_level=True,
+                target_user=target_user,
+                target_home=target_home,
+            )
+
+        # (a) unit file written under ~/.config/systemd/user/
+        unit_path = fake_dir / f"{UNIT_NAME}.service"
+        assert unit_path.exists()
+        # (b) systemctl --user enable <name>.service in call sequence
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        enable_call = next(
+            (c for c in calls if "enable" in c and f"{UNIT_NAME}.service" in c),
+            None,
+        )
+        assert enable_call is not None, f"enable call missing in {calls}"
+        assert "--user" in enable_call
+        # (c) _cleanup_user_unit never called from install path
+        cleanup_spy.assert_not_called()
+        # (d) user-level units omit the User= line
+        content = unit_path.read_text(encoding="utf-8")
+        assert "User=" not in content
+
+    def test_install_vslam_service_user_level(self, tmp_path: Path) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_home = tmp_path / "home" / "alice"
+        fake_dir = fake_home / ".config" / "systemd" / "user"
+        target_user = "alice"
+        target_home = str(fake_home)
+
+        patches = self._common_patches(
+            fake_home=fake_home, fake_dir=fake_dir, target_user=target_user,
+        )
+        cleanup_spy = MagicMock(return_value=False)
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patch("mower_rover.service.unit._cleanup_user_unit", cleanup_spy), \
+             patch("mower_rover.service.unit.subprocess.run") as mock_run:
+            install_vslam_service(
+                ctx,
+                user_level=True,
+                target_user=target_user,
+                target_home=target_home,
+            )
+
+        unit_path = fake_dir / f"{VSLAM_UNIT_NAME}.service"
+        assert unit_path.exists()
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        enable_call = next(
+            (c for c in calls if "enable" in c and f"{VSLAM_UNIT_NAME}.service" in c),
+            None,
+        )
+        assert enable_call is not None, f"enable call missing in {calls}"
+        assert "--user" in enable_call
+        cleanup_spy.assert_not_called()
+        content = unit_path.read_text(encoding="utf-8")
+        assert "User=" not in content
+
+    def test_install_vslam_bridge_service_user_level(self, tmp_path: Path) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_home = tmp_path / "home" / "alice"
+        fake_dir = fake_home / ".config" / "systemd" / "user"
+        target_user = "alice"
+        target_home = str(fake_home)
+
+        patches = self._common_patches(
+            fake_home=fake_home, fake_dir=fake_dir, target_user=target_user,
+        )
+        cleanup_spy = MagicMock(return_value=False)
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patch("mower_rover.service.unit._cleanup_user_unit", cleanup_spy), \
+             patch("mower_rover.service.unit.subprocess.run") as mock_run:
+            install_vslam_bridge_service(
+                ctx,
+                user_level=True,
+                target_user=target_user,
+                target_home=target_home,
+            )
+
+        unit_path = fake_dir / f"{VSLAM_BRIDGE_UNIT_NAME}.service"
+        assert unit_path.exists()
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        enable_call = next(
+            (c for c in calls if "enable" in c and f"{VSLAM_BRIDGE_UNIT_NAME}.service" in c),
+            None,
+        )
+        assert enable_call is not None, f"enable call missing in {calls}"
+        assert "--user" in enable_call
+        cleanup_spy.assert_not_called()
+        content = unit_path.read_text(encoding="utf-8")
+        assert "User=" not in content
+
+
+# ---------------------------------------------------------------------------
+# System-level install renders correct User= line under sudo elevation
+# (Phase 1 step 1.2a / 1.7 assertion (d) for system tier)
+# ---------------------------------------------------------------------------
+
+
+class TestSystemLevelInstallTargetUser:
+    """Under simulated sudo (effective user = root), --target-user controls User=."""
+
+    def test_install_service_renders_target_user_under_sudo(self, tmp_path: Path) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_dir = tmp_path / "etc" / "systemd" / "system"
+
+        with (
+            patch("mower_rover.service.unit.unit_dir", return_value=fake_dir),
+            patch(
+                "mower_rover.service.unit.shutil.which",
+                return_value="/usr/bin/mower-jetson",
+            ),
+            # Simulate sudo: effective user is root
+            patch("mower_rover.service.unit.getpass.getuser", return_value="root"),
+            patch("mower_rover.service.unit.Path.home", return_value=tmp_path / "root"),
+            patch(
+                "mower_rover.service.unit.load_jetson_config",
+                return_value=JetsonConfig(),
+            ),
+            patch("mower_rover.service.unit.subprocess.run"),
+        ):
+            install_service(
+                ctx,
+                user_level=False,
+                target_user="vincent",
+                target_home="/home/vincent",
+            )
+
+        unit_path = fake_dir / f"{UNIT_NAME}.service"
+        content = unit_path.read_text(encoding="utf-8")
+        assert "User=vincent" in content
+        assert "User=root" not in content
+
+    def test_install_vslam_service_renders_target_user_under_sudo(self, tmp_path: Path) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_dir = tmp_path / "etc" / "systemd" / "system"
+
+        with (
+            patch("mower_rover.service.unit.unit_dir", return_value=fake_dir),
+            patch("mower_rover.service.unit.getpass.getuser", return_value="root"),
+            patch("mower_rover.service.unit.Path.home", return_value=tmp_path / "root"),
+            patch("mower_rover.service.unit.subprocess.run"),
+        ):
+            install_vslam_service(
+                ctx,
+                user_level=False,
+                target_user="vincent",
+                target_home="/home/vincent",
+            )
+
+        unit_path = fake_dir / f"{VSLAM_UNIT_NAME}.service"
+        content = unit_path.read_text(encoding="utf-8")
+        assert "User=vincent" in content
+        assert "User=root" not in content
+
+    def test_install_vslam_bridge_service_renders_target_user_under_sudo(
+        self, tmp_path: Path,
+    ) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_dir = tmp_path / "etc" / "systemd" / "system"
+
+        with (
+            patch("mower_rover.service.unit.unit_dir", return_value=fake_dir),
+            patch(
+                "mower_rover.service.unit.shutil.which",
+                return_value="/usr/bin/mower-jetson",
+            ),
+            patch("mower_rover.service.unit.getpass.getuser", return_value="root"),
+            patch("mower_rover.service.unit.Path.home", return_value=tmp_path / "root"),
+            patch("mower_rover.service.unit.subprocess.run"),
+        ):
+            install_vslam_bridge_service(
+                ctx,
+                user_level=False,
+                target_user="vincent",
+                target_home="/home/vincent",
+            )
+
+        unit_path = fake_dir / f"{VSLAM_BRIDGE_UNIT_NAME}.service"
+        content = unit_path.read_text(encoding="utf-8")
+        assert "User=vincent" in content
+        assert "User=root" not in content
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_user_unit helper (Phase 1 step 1.2)
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupUserUnit:
+    def test_returns_false_when_no_unit_present(self, tmp_path: Path) -> None:
+        with (
+            patch("mower_rover.service.unit.Path.home", return_value=tmp_path),
+            patch("mower_rover.service.unit.subprocess.run"),
+        ):
+            assert _cleanup_user_unit("mower-vslam") is False
+
+    def test_returns_true_and_deletes_when_present(self, tmp_path: Path) -> None:
+        unit_dir_path = tmp_path / ".config" / "systemd" / "user"
+        unit_dir_path.mkdir(parents=True)
+        unit_file = unit_dir_path / "mower-vslam.service"
+        unit_file.write_text("[Unit]\n", encoding="utf-8")
+
+        with (
+            patch("mower_rover.service.unit.Path.home", return_value=tmp_path),
+            patch("mower_rover.service.unit.subprocess.run"),
+        ):
+            assert _cleanup_user_unit("mower-vslam") is True
+        assert not unit_file.exists()
+
+    def test_swallows_systemctl_errors(self, tmp_path: Path) -> None:
+        # All systemctl invocations raise; helper must still return cleanly.
+        with (
+            patch("mower_rover.service.unit.Path.home", return_value=tmp_path),
+            patch(
+                "mower_rover.service.unit.subprocess.run",
+                side_effect=subprocess.CalledProcessError(1, ["systemctl"]),
+            ),
+        ):
+            # No unit file present — returns False and does not raise.
+            assert _cleanup_user_unit("mower-vslam") is False

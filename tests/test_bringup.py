@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,8 @@ from typer.testing import CliRunner
 from mower_rover.cli.bringup import (
     STEP_NAMES,
     BringupContext,
+    _DEFERRED_CHECKS,
+    _HW_DEPENDENT,
     _archive_binaries_check,
     _build_depthai_check,
     _build_rtabmap_check,
@@ -751,8 +754,10 @@ class TestRunVslamConfig:
 class TestVslamServicesActive:
     def test_returns_true_when_both_active(self, mock_client: MagicMock) -> None:
         mock_client.run.side_effect = [
-            _ssh_ok(),  # mower-vslam active
-            _ssh_ok(),  # mower-vslam-bridge active
+            _ssh_ok(),  # mower-vslam is-active
+            _ssh_ok(),  # mower-vslam is-enabled
+            _ssh_ok(),  # mower-vslam-bridge is-active
+            _ssh_ok(),  # mower-vslam-bridge is-enabled
         ]
         assert _vslam_services_active(mock_client) is True
 
@@ -760,13 +765,26 @@ class TestVslamServicesActive:
         mock_client.run.side_effect = [
             _ssh_fail(returncode=3),  # mower-vslam inactive
             _ssh_ok(),
+            _ssh_ok(),
+            _ssh_ok(),
         ]
         assert _vslam_services_active(mock_client) is False
 
     def test_returns_false_when_bridge_inactive(self, mock_client: MagicMock) -> None:
         mock_client.run.side_effect = [
             _ssh_ok(),
+            _ssh_ok(),
             _ssh_fail(returncode=3),  # bridge inactive
+            _ssh_ok(),
+        ]
+        assert _vslam_services_active(mock_client) is False
+
+    def test_returns_false_when_vslam_not_enabled(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = [
+            _ssh_ok(),
+            _ssh_fail(returncode=1),  # mower-vslam not enabled
+            _ssh_ok(),
+            _ssh_ok(),
         ]
         assert _vslam_services_active(mock_client) is False
 
@@ -780,6 +798,7 @@ class TestRunVslamServices:
         bctx = _bctx(tmp_path, yes=True)
 
         mock_client.run.side_effect = [
+            _ssh_ok(),  # cleanup-user-units
             _ssh_ok(),  # vslam install
             _ssh_ok(),  # bridge-install
             _ssh_ok(),  # systemctl start
@@ -787,21 +806,35 @@ class TestRunVslamServices:
 
         _run_vslam_services(mock_client, bctx)
 
-        assert mock_client.run.call_count == 3
-        # vslam install
-        vslam_cmd = mock_client.run.call_args_list[0][0][0]
-        assert "vslam install" in " ".join(vslam_cmd)
-        # bridge-install
-        bridge_cmd = mock_client.run.call_args_list[1][0][0]
-        assert "bridge-install" in " ".join(bridge_cmd)
-        # systemctl start
-        start_cmd = mock_client.run.call_args_list[2][0][0]
-        assert "systemctl" in " ".join(start_cmd)
-        assert "mower-vslam" in " ".join(start_cmd)
+        assert mock_client.run.call_count == 4
+        # cleanup runs first, non-elevated, no sudo
+        cleanup_cmd = " ".join(mock_client.run.call_args_list[0][0][0])
+        assert "cleanup-user-units" in cleanup_cmd
+        assert "sudo" not in cleanup_cmd
+        # vslam install: sudo + target-user/target-home flags
+        vslam_cmd = " ".join(mock_client.run.call_args_list[1][0][0])
+        assert "vslam install" in vslam_cmd
+        assert "sudo" in vslam_cmd
+        assert "--target-user" in vslam_cmd
+        assert "--target-home" in vslam_cmd
+        # bridge-install: sudo + target flags
+        bridge_cmd = " ".join(mock_client.run.call_args_list[2][0][0])
+        assert "bridge-install" in bridge_cmd
+        assert "sudo" in bridge_cmd
+        assert "--target-user" in bridge_cmd
+        # systemctl start: sudo, no --user
+        start_cmd = " ".join(mock_client.run.call_args_list[3][0][0])
+        assert "sudo systemctl start" in start_cmd
+        assert "mower-vslam" in start_cmd
+        assert "--user" not in start_cmd
 
     def test_vslam_install_failure_exits(self, mock_client: MagicMock, tmp_path: Path) -> None:
         bctx = _bctx(tmp_path, yes=True)
-        mock_client.run.return_value = _ssh_fail(returncode=1, stderr="install error")
+        # cleanup succeeds, install fails
+        mock_client.run.side_effect = [
+            _ssh_ok(),  # cleanup
+            _ssh_fail(returncode=1, stderr="install error"),  # vslam install
+        ]
 
         with pytest.raises(ClickExit):
             _run_vslam_services(mock_client, bctx)
@@ -1140,14 +1173,15 @@ class TestStepOrdering:
             "verify",
             "vslam-config",
             "service",
+            "vslam-db-check",
             "vslam-services",
             "final-verify",
         )
 
-    def test_all_19_steps_present(self) -> None:
+    def test_all_20_steps_present(self) -> None:
         from mower_rover.cli.bringup import BRINGUP_STEPS
 
-        assert len(BRINGUP_STEPS) == 19
+        assert len(BRINGUP_STEPS) == 20
         names = tuple(s.name for s in BRINGUP_STEPS)
         assert names == STEP_NAMES
 
@@ -1250,13 +1284,14 @@ class TestRunFinalVerify:
             _run_final_verify(mock_client, bctx)
 
     def test_critical_failures_exit(self, mock_client: MagicMock, tmp_path: Path) -> None:
-        """Exits with code 1 if critical checks still fail after probe deadline."""
+        """Exits with code 1 if critical infra checks still fail after probe deadline."""
         bctx = _bctx(tmp_path)
         import json
 
+        # Use a non-HW-dependent check to trigger blocking failure
         probe_result = json.dumps([
             {"name": "python", "status": "pass", "severity": "critical", "detail": "ok"},
-            {"name": "oakd", "status": "fail", "severity": "critical", "detail": "not found"},
+            {"name": "jetpack_version", "status": "fail", "severity": "critical", "detail": "wrong version"},
         ])
 
         call_count = 0
@@ -1564,3 +1599,107 @@ class TestBackupCommand:
         assert result.exit_code == 0, result.output
         assert "1 pulled" in result.output
         assert "4 skipped" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Deferred/HW-dependent sets and final-verify 30s wait
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredAndHwDependentSets:
+    """Verify module-level _DEFERRED_CHECKS and _HW_DEPENDENT constants."""
+
+    def test_deferred_checks_importable(self) -> None:
+        from mower_rover.cli.bringup import _DEFERRED_CHECKS
+
+        assert isinstance(_DEFERRED_CHECKS, frozenset)
+
+    def test_hw_dependent_importable(self) -> None:
+        from mower_rover.cli.bringup import _HW_DEPENDENT
+
+        assert isinstance(_HW_DEPENDENT, frozenset)
+
+    def test_oakd_in_deferred_checks(self) -> None:
+        from mower_rover.cli.bringup import _DEFERRED_CHECKS
+
+        assert "oakd" in _DEFERRED_CHECKS
+
+    def test_oakd_in_hw_dependent(self) -> None:
+        from mower_rover.cli.bringup import _HW_DEPENDENT
+
+        assert "oakd" in _HW_DEPENDENT
+
+    def test_waveshare_hub_in_deferred_checks(self) -> None:
+        from mower_rover.cli.bringup import _DEFERRED_CHECKS
+
+        assert "waveshare_hub" in _DEFERRED_CHECKS
+
+    def test_waveshare_hub_in_hw_dependent(self) -> None:
+        from mower_rover.cli.bringup import _HW_DEPENDENT
+
+        assert "waveshare_hub" in _HW_DEPENDENT
+
+    def test_usbcore_quirks_in_deferred_checks(self) -> None:
+        from mower_rover.cli.bringup import _DEFERRED_CHECKS
+
+        assert "usbcore_quirks" in _DEFERRED_CHECKS
+
+    def test_oakd_udev_rule_in_deferred_checks(self) -> None:
+        from mower_rover.cli.bringup import _DEFERRED_CHECKS
+
+        assert "oakd_udev_rule" in _DEFERRED_CHECKS
+
+    def test_oakd_usb_autosuspend_in_deferred_checks(self) -> None:
+        from mower_rover.cli.bringup import _DEFERRED_CHECKS
+
+        assert "oakd_usb_autosuspend" in _DEFERRED_CHECKS
+
+    def test_oakd_usbfs_memory_in_deferred_checks(self) -> None:
+        from mower_rover.cli.bringup import _DEFERRED_CHECKS
+
+        assert "oakd_usbfs_memory" in _DEFERRED_CHECKS
+
+    def test_hw_dependent_is_subset_of_deferred(self) -> None:
+        from mower_rover.cli.bringup import _DEFERRED_CHECKS, _HW_DEPENDENT
+
+        assert _HW_DEPENDENT.issubset(_DEFERRED_CHECKS)
+
+
+class TestFinalVerify30sWait:
+    """Verify 30s sleep after SSH-up, before first probe poll."""
+
+    def test_sleep_30_called_after_ssh_up(
+        self, mock_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """The 30s wait fires between SSH reconnect and probe polling."""
+        import json
+
+        bctx = _bctx(tmp_path)
+        probe_result = json.dumps([
+            {"name": "python", "status": "pass", "severity": "critical", "detail": "ok"},
+        ])
+
+        call_count = 0
+
+        def side_effect(argv, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise SshError("Connection closed")  # reboot
+            if call_count == 2:
+                return _ssh_ok(stdout="ok\n")  # SSH poll
+            return _ssh_ok(stdout=probe_result)  # probe
+
+        mock_client.run.side_effect = side_effect
+
+        sleep_calls: list[float] = []
+        original_sleep = time.sleep
+
+        def mock_sleep(seconds: float) -> None:
+            sleep_calls.append(seconds)
+
+        with patch("mower_rover.cli.bringup.time.sleep", side_effect=mock_sleep):
+            _run_final_verify(mock_client, bctx)
+
+        # The 30s wait must be present in the sleep calls
+        assert 30 in sleep_calls, f"Expected 30 in sleep calls: {sleep_calls}"

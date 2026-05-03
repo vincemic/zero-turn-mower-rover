@@ -171,9 +171,50 @@ def _systemctl(
     return subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def _cleanup_user_unit(unit_name: str) -> bool:
+    """Stop, disable, and remove a stale user-level unit file (migration helper).
+
+    Runs as the current (unprivileged) user. All errors are swallowed —
+    idempotent on fresh installs where no user-level unit exists.
+
+    Returns True if a unit file was actually deleted, False otherwise.
+    """
+    log = _log.bind(op="cleanup_user_unit", unit=unit_name)
+    service = f"{unit_name}.service"
+
+    for action in ("stop", "disable"):
+        try:
+            _systemctl([action, service], user_level=True)
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            pass
+
+    user_unit_path = Path.home() / ".config" / "systemd" / "user" / service
+    deleted = False
+    if user_unit_path.exists():
+        try:
+            user_unit_path.unlink()
+            deleted = True
+            log.info("user_unit_migrated", path=str(user_unit_path))
+        except OSError:
+            pass
+
+    try:
+        _systemctl(["daemon-reload"], user_level=True)
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        pass
+
+    return deleted
+
+
 @requires_confirmation("Install mower-health systemd service")
-def install_service(ctx: SafetyContext, *, user_level: bool) -> None:
-    """Write the mower-health unit file and reload systemd."""
+def install_service(
+    ctx: SafetyContext,
+    *,
+    user_level: bool,
+    target_user: str | None = None,
+    target_home: str | None = None,
+) -> None:
+    """Write the mower-health unit file, reload systemd, and enable the unit."""
     log = _log.bind(op="install_service", user_level=user_level)
 
     if ctx.dry_run:
@@ -184,8 +225,8 @@ def install_service(ctx: SafetyContext, *, user_level: bool) -> None:
         shutil.which("mower-jetson")
         or str(Path.home() / ".local" / "bin" / "mower-jetson")
     )
-    user = getpass.getuser()
-    home = str(Path.home())
+    user = target_user or getpass.getuser()
+    home = target_home or str(Path.home())
     cfg = load_jetson_config()
 
     content = generate_unit_file(
@@ -202,6 +243,7 @@ def install_service(ctx: SafetyContext, *, user_level: bool) -> None:
     unit_path.write_text(content, encoding="utf-8")
 
     _systemctl(["daemon-reload"], user_level=user_level)
+    _systemctl(["enable", f"{UNIT_NAME}.service"], user_level=user_level)
     log.info("service_installed", path=str(unit_path))
 
 
@@ -241,16 +283,22 @@ def uninstall_service(ctx: SafetyContext, *, user_level: bool) -> None:
 
 
 @requires_confirmation("Install mower-vslam systemd service")
-def install_vslam_service(ctx: SafetyContext, *, user_level: bool) -> None:
-    """Write the mower-vslam unit file and reload systemd."""
+def install_vslam_service(
+    ctx: SafetyContext,
+    *,
+    user_level: bool,
+    target_user: str | None = None,
+    target_home: str | None = None,
+) -> None:
+    """Write the mower-vslam unit file, reload systemd, and enable the unit."""
     log = _log.bind(op="install_vslam_service", user_level=user_level)
 
     if ctx.dry_run:
         log.info("dry_run_install_vslam_service")
         return
 
-    user = getpass.getuser()
-    home = str(Path.home())
+    user = target_user or getpass.getuser()
+    home = target_home or str(Path.home())
 
     content = generate_vslam_unit_file(
         user=user,
@@ -264,6 +312,7 @@ def install_vslam_service(ctx: SafetyContext, *, user_level: bool) -> None:
     unit_path.write_text(content, encoding="utf-8")
 
     _systemctl(["daemon-reload"], user_level=user_level)
+    _systemctl(["enable", f"{VSLAM_UNIT_NAME}.service"], user_level=user_level)
     log.info("vslam_service_installed", path=str(unit_path))
 
 
@@ -325,8 +374,14 @@ def generate_vslam_bridge_unit_file(
 
 
 @requires_confirmation("Install mower-vslam-bridge systemd service")
-def install_vslam_bridge_service(ctx: SafetyContext, *, user_level: bool) -> None:
-    """Write the mower-vslam-bridge unit file and reload systemd."""
+def install_vslam_bridge_service(
+    ctx: SafetyContext,
+    *,
+    user_level: bool,
+    target_user: str | None = None,
+    target_home: str | None = None,
+) -> None:
+    """Write the mower-vslam-bridge unit file, reload systemd, and enable the unit."""
     log = _log.bind(op="install_vslam_bridge_service", user_level=user_level)
 
     if ctx.dry_run:
@@ -337,8 +392,8 @@ def install_vslam_bridge_service(ctx: SafetyContext, *, user_level: bool) -> Non
         shutil.which("mower-jetson")
         or str(Path.home() / ".local" / "bin" / "mower-jetson")
     )
-    user = getpass.getuser()
-    home = str(Path.home())
+    user = target_user or getpass.getuser()
+    home = target_home or str(Path.home())
 
     content = generate_vslam_bridge_unit_file(
         mower_jetson_path=mower_jetson,
@@ -353,6 +408,7 @@ def install_vslam_bridge_service(ctx: SafetyContext, *, user_level: bool) -> Non
     unit_path.write_text(content, encoding="utf-8")
 
     _systemctl(["daemon-reload"], user_level=user_level)
+    _systemctl(["enable", f"{VSLAM_BRIDGE_UNIT_NAME}.service"], user_level=user_level)
     log.info("vslam_bridge_service_installed", path=str(unit_path))
 
 

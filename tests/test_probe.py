@@ -51,6 +51,9 @@ class TestRegistry:
             "health_service",
             "loginctl_linger",
             "vslam_socket_active",
+            "usbcore_quirks",
+            "waveshare_hub",
+            "oakd_udev_rule",
         }
         assert expected.issubset(set(_REGISTRY.keys()))
 
@@ -430,60 +433,85 @@ class TestSshHardeningCheck:
 
 
 class TestOakdCheck:
-    def test_pass_superspeed(self, tmp_path: Path) -> None:
+    """Tests for the rewritten service-aware OAK-D check.
+
+    Uses monkeypatched ``_service_active_fn`` to avoid systemctl dependency.
+    """
+
+    def test_pass_booted_active(self, tmp_path: Path) -> None:
         usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
         usb_dev.mkdir(parents=True)
         (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
+        (usb_dev / "idProduct").write_text("f63b\n", encoding="utf-8")
         (usb_dev / "speed").write_text("5000\n", encoding="utf-8")
-        fn = _REGISTRY["oakd"].fn
-        passed, detail = fn(tmp_path)
+        from mower_rover.probe.checks.oakd import check_oakd
+        passed, detail = check_oakd(tmp_path, _service_active_fn=lambda: True)
         assert passed is True
-        assert "USB 5000 Mbps" in detail
-
-    def test_pass_superspeed_plus(self, tmp_path: Path) -> None:
-        usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
-        usb_dev.mkdir(parents=True)
-        (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
-        (usb_dev / "speed").write_text("10000\n", encoding="utf-8")
-        fn = _REGISTRY["oakd"].fn
-        passed, detail = fn(tmp_path)
-        assert passed is True
-        assert "USB 10000 Mbps" in detail
-
-    def test_fail_usb2(self, tmp_path: Path) -> None:
-        usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
-        usb_dev.mkdir(parents=True)
-        (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
-        (usb_dev / "speed").write_text("480\n", encoding="utf-8")
-        fn = _REGISTRY["oakd"].fn
-        passed, detail = fn(tmp_path)
-        assert passed is False
-        assert "USB 480 Mbps" in detail
+        assert "f63b" in detail
         assert "5000" in detail
+
+    def test_pass_booted_superspeed_plus(self, tmp_path: Path) -> None:
+        usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
+        usb_dev.mkdir(parents=True)
+        (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
+        (usb_dev / "idProduct").write_text("f63b\n", encoding="utf-8")
+        (usb_dev / "speed").write_text("10000\n", encoding="utf-8")
+        from mower_rover.probe.checks.oakd import check_oakd
+        passed, detail = check_oakd(tmp_path, _service_active_fn=lambda: True)
+        assert passed is True
+        assert "10000" in detail
+
+    def test_fail_crashloop_bootloader_active(self, tmp_path: Path) -> None:
+        usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
+        usb_dev.mkdir(parents=True)
+        (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
+        (usb_dev / "idProduct").write_text("2485\n", encoding="utf-8")
+        (usb_dev / "speed").write_text("480\n", encoding="utf-8")
+        from mower_rover.probe.checks.oakd import check_oakd
+        passed, detail = check_oakd(tmp_path, _service_active_fn=lambda: True)
+        assert passed is False
+        assert "2485" in detail
+
+    def test_pass_bootloader_inactive(self, tmp_path: Path) -> None:
+        usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
+        usb_dev.mkdir(parents=True)
+        (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
+        (usb_dev / "idProduct").write_text("2485\n", encoding="utf-8")
+        (usb_dev / "speed").write_text("480\n", encoding="utf-8")
+        from mower_rover.probe.checks.oakd import check_oakd
+        passed, detail = check_oakd(tmp_path, _service_active_fn=lambda: False)
+        assert passed is True
+        assert "bootloader" in detail.lower()
 
     def test_pass_no_speed_file(self, tmp_path: Path) -> None:
         usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
         usb_dev.mkdir(parents=True)
         (usb_dev / "idVendor").write_text("03e7\n", encoding="utf-8")
-        fn = _REGISTRY["oakd"].fn
-        passed, detail = fn(tmp_path)
+        (usb_dev / "idProduct").write_text("f63b\n", encoding="utf-8")
+        from mower_rover.probe.checks.oakd import check_oakd
+        passed, detail = check_oakd(tmp_path, _service_active_fn=lambda: True)
         assert passed is True
-        assert "speed unknown" in detail
+        assert "f63b" in detail
 
-    def test_fail_no_device(self, tmp_path: Path) -> None:
-        fn = _REGISTRY["oakd"].fn
-        passed, detail = fn(tmp_path)
+    def test_fail_no_device_active(self, tmp_path: Path) -> None:
+        from mower_rover.probe.checks.oakd import check_oakd
+        passed, detail = check_oakd(tmp_path, _service_active_fn=lambda: True)
         assert passed is False
-        assert "No OAK device" in detail
+        assert "no OAK-D" in detail.lower() or "active" in detail.lower()
+
+    def test_pass_no_device_inactive(self, tmp_path: Path) -> None:
+        from mower_rover.probe.checks.oakd import check_oakd
+        passed, detail = check_oakd(tmp_path, _service_active_fn=lambda: False)
+        assert passed is True
+        assert "not present" in detail.lower() or "not running" in detail.lower()
 
     def test_fail_wrong_vendor(self, tmp_path: Path) -> None:
         usb_dev = tmp_path / "sys" / "bus" / "usb" / "devices" / "1-2"
         usb_dev.mkdir(parents=True)
         (usb_dev / "idVendor").write_text("8086\n", encoding="utf-8")
-        fn = _REGISTRY["oakd"].fn
-        passed, detail = fn(tmp_path)
+        from mower_rover.probe.checks.oakd import check_oakd
+        passed, detail = check_oakd(tmp_path, _service_active_fn=lambda: True)
         assert passed is False
-        assert "No OAK device" in detail
 
     def test_severity_is_critical(self) -> None:
         spec = _REGISTRY["oakd"]
@@ -643,3 +671,148 @@ class TestThermalGateCheck:
         passed, detail = fn(tmp_path)
         assert passed is True
         assert "No thermal zones" in detail
+
+
+# ---------------------------------------------------------------------------
+# usbcore_quirks check tests
+# ---------------------------------------------------------------------------
+
+
+class TestUsbcoreQuirksCheck:
+    def test_pass_both_quirks(self, tmp_path: Path) -> None:
+        param = tmp_path / "sys" / "module" / "usbcore" / "parameters"
+        param.mkdir(parents=True)
+        (param / "quirks").write_text(
+            "03e7:2485:gk,03e7:f63b:gk\n", encoding="utf-8"
+        )
+        fn = _REGISTRY["usbcore_quirks"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "both" in detail.lower()
+
+    def test_fail_missing_f63b(self, tmp_path: Path) -> None:
+        param = tmp_path / "sys" / "module" / "usbcore" / "parameters"
+        param.mkdir(parents=True)
+        (param / "quirks").write_text("03e7:2485:gk\n", encoding="utf-8")
+        fn = _REGISTRY["usbcore_quirks"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "03e7:f63b:gk" in detail
+
+    def test_fail_missing_2485(self, tmp_path: Path) -> None:
+        param = tmp_path / "sys" / "module" / "usbcore" / "parameters"
+        param.mkdir(parents=True)
+        (param / "quirks").write_text("03e7:f63b:gk\n", encoding="utf-8")
+        fn = _REGISTRY["usbcore_quirks"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "03e7:2485:gk" in detail
+
+    def test_fail_missing_both(self, tmp_path: Path) -> None:
+        param = tmp_path / "sys" / "module" / "usbcore" / "parameters"
+        param.mkdir(parents=True)
+        (param / "quirks").write_text("\n", encoding="utf-8")
+        fn = _REGISTRY["usbcore_quirks"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "03e7:2485:gk" in detail
+        assert "03e7:f63b:gk" in detail
+
+    def test_fail_missing_file(self, tmp_path: Path) -> None:
+        fn = _REGISTRY["usbcore_quirks"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "missing sysfs" in detail
+
+
+# ---------------------------------------------------------------------------
+# waveshare_hub check tests
+# ---------------------------------------------------------------------------
+
+
+class TestWaveshareHubCheck:
+    def test_pass_both_controllers(self, tmp_path: Path) -> None:
+        usb3 = tmp_path / "sys" / "bus" / "usb" / "devices" / "2-0"
+        usb3.mkdir(parents=True)
+        (usb3 / "idVendor").write_text("2109\n", encoding="utf-8")
+        (usb3 / "idProduct").write_text("0817\n", encoding="utf-8")
+        usb2 = tmp_path / "sys" / "bus" / "usb" / "devices" / "2-1"
+        usb2.mkdir(parents=True)
+        (usb2 / "idVendor").write_text("2109\n", encoding="utf-8")
+        (usb2 / "idProduct").write_text("2817\n", encoding="utf-8")
+        fn = _REGISTRY["waveshare_hub"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "USB 3.0" in detail
+        assert "USB 2.0" in detail
+
+    def test_pass_usb3_only(self, tmp_path: Path) -> None:
+        usb3 = tmp_path / "sys" / "bus" / "usb" / "devices" / "2-0"
+        usb3.mkdir(parents=True)
+        (usb3 / "idVendor").write_text("2109\n", encoding="utf-8")
+        (usb3 / "idProduct").write_text("0817\n", encoding="utf-8")
+        fn = _REGISTRY["waveshare_hub"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "USB 3.0 controller only" in detail
+
+    def test_fail_usb2_only(self, tmp_path: Path) -> None:
+        usb2 = tmp_path / "sys" / "bus" / "usb" / "devices" / "2-1"
+        usb2.mkdir(parents=True)
+        (usb2 / "idVendor").write_text("2109\n", encoding="utf-8")
+        (usb2 / "idProduct").write_text("2817\n", encoding="utf-8")
+        fn = _REGISTRY["waveshare_hub"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "USB 2.0 controller only" in detail
+
+    def test_fail_absent(self, tmp_path: Path) -> None:
+        fn = _REGISTRY["waveshare_hub"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "not detected" in detail
+
+    def test_severity_is_warning(self) -> None:
+        spec = _REGISTRY["waveshare_hub"]
+        assert spec.severity == Severity.WARNING
+
+
+# ---------------------------------------------------------------------------
+# oakd_udev_rule check tests
+# ---------------------------------------------------------------------------
+
+
+class TestOakdUdevRuleCheck:
+    def test_pass_rule_present(self, tmp_path: Path) -> None:
+        rule_dir = tmp_path / "etc" / "udev" / "rules.d"
+        rule_dir.mkdir(parents=True)
+        (rule_dir / "80-oakd-usb.rules").write_text(
+            'SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"\n',
+            encoding="utf-8",
+        )
+        fn = _REGISTRY["oakd_udev_rule"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is True
+        assert "03e7" in detail
+
+    def test_fail_rule_missing(self, tmp_path: Path) -> None:
+        fn = _REGISTRY["oakd_udev_rule"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "missing" in detail.lower()
+
+    def test_fail_rule_no_vendor(self, tmp_path: Path) -> None:
+        rule_dir = tmp_path / "etc" / "udev" / "rules.d"
+        rule_dir.mkdir(parents=True)
+        (rule_dir / "80-oakd-usb.rules").write_text(
+            'SUBSYSTEM=="usb", MODE="0666"\n',
+            encoding="utf-8",
+        )
+        fn = _REGISTRY["oakd_udev_rule"].fn
+        passed, detail = fn(tmp_path)
+        assert passed is False
+        assert "does not reference" in detail
+
+    def test_severity_is_warning(self) -> None:
+        spec = _REGISTRY["oakd_udev_rule"]
+        assert spec.severity == Severity.WARNING

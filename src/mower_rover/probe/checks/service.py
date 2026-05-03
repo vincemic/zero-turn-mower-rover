@@ -16,10 +16,14 @@ from mower_rover.probe.registry import Severity, register
 
 @register("health_service", severity=Severity.CRITICAL)
 def check_health_service(sysroot: Path) -> tuple[bool, str]:
-    """Check that mower-health.service is active (user scope)."""
+    """Check that mower-health.service is active (system scope).
+
+    Plan 014 Phase 1 step 1.6a: services are installed at the system tier by
+    default; query without ``--user`` so the probe matches production.
+    """
     try:
         result = subprocess.run(
-            ["systemctl", "--user", "is-active", "mower-health.service"],
+            ["systemctl", "is-active", "mower-health.service"],
             capture_output=True,
             timeout=5,
         )

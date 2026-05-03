@@ -1,6 +1,6 @@
 """`mower jetson bringup` — automated end-to-end Jetson provisioning.
 
-Runs on the **laptop** (Windows or Linux). Walks through 19 steps:
+Runs on the **laptop** (Windows or Linux). Walks through 20 steps:
 
  1. clear-host-key     — Remove stale SSH host key
  2. check-ssh          — SSH connectivity gate
@@ -19,8 +19,9 @@ Runs on the **laptop** (Windows or Linux). Walks through 19 steps:
 15. verify             — Remote probe verification
 16. vslam-config       — Default VSLAM configuration
 17. service            — mower-health.service install + start
-18. vslam-services     — VSLAM + bridge systemd services
-19. final-verify       — Final reboot + full probe verification
+18. vslam-db-check     — RTAB-Map DB integrity check + quarantine
+19. vslam-services     — VSLAM + bridge systemd services
+20. final-verify       — Final reboot + full probe verification
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from rich.console import Console
 from rich.table import Table
 
 from mower_rover.logging_setup.setup import get_logger
+from mower_rover.service.unit import UNIT_NAME, VSLAM_BRIDGE_UNIT_NAME, VSLAM_UNIT_NAME
 from mower_rover.transport.ssh import JetsonClient, SshError
 
 STEP_NAMES = (
@@ -63,9 +65,47 @@ STEP_NAMES = (
     "verify",
     "vslam-config",
     "service",
+    "vslam-db-check",
     "vslam-services",
     "final-verify",
 )
+
+# Checks whose critical failures are deferred because later bringup steps
+# will address them (e.g., services not yet installed at step 15).  Also
+# includes hardware/kernel-param checks that may legitimately fail when
+# the OAK-D or Waveshare hub is not physically connected during bringup.
+_DEFERRED_CHECKS: frozenset[str] = frozenset({
+    "health_service",       # installed by step 17 (service)
+    "vslam_process",        # installed by step 18 (vslam-services)
+    "vslam_bridge",         # depends on vslam_process
+    "vslam_socket_active",  # depends on vslam_process
+    "vslam_pose_rate",      # depends on vslam_process
+    "vslam_params",         # deployed by step 16 (vslam-config)
+    "oakd_vslam_config",    # deployed by step 16 (vslam-config)
+    "vslam_confidence",     # depends on vslam_process
+    "oakd",                 # requires OAK-D physically connected + VSLAM running
+    "usbcore_quirks",       # kernel param — may not be set until after harden+reboot
+    "waveshare_hub",        # requires Waveshare hub physically connected
+    "oakd_udev_rule",       # deployed by jetson-harden.sh
+    "oakd_usb_autosuspend", # kernel param — set by jetson-harden.sh
+    "oakd_usbfs_memory",    # kernel param — set by jetson-harden.sh
+})
+
+# Hardware-dependent checks that require physical devices (OAK-D, Waveshare
+# hub).  At final-verify these yield a yellow warning rather than a blocking
+# red failure, because the camera/hub may not be connected during bringup.
+_HW_DEPENDENT: frozenset[str] = frozenset({
+    "health_service",
+    "vslam_process",
+    "vslam_bridge",
+    "vslam_socket_active",
+    "vslam_pose_rate",
+    "vslam_params",
+    "oakd_vslam_config",
+    "vslam_confidence",
+    "oakd",                 # requires OAK-D physically connected
+    "waveshare_hub",        # requires Waveshare hub physically connected
+})
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +496,7 @@ _BUILD_APT_PACKAGES = (
     "libusb-1.0-0-dev",
     "libsystemd-dev",
     "libyaml-cpp-dev",
+    "sqlite3",
 )
 
 
@@ -983,17 +1024,6 @@ def _run_verify(client: JetsonClient, bctx: BringupContext) -> None:
             critical_fails.append(c.get("name", "?"))
     bctx.console.print(table)
 
-    # Checks that later bringup steps will address — don't abort here.
-    _DEFERRED_CHECKS = {
-        "health_service",    # installed by step 17 (service)
-        "vslam_process",     # installed by step 18 (vslam-services)
-        "vslam_bridge",      # depends on vslam_process
-        "vslam_socket_active",  # depends on vslam_process
-        "vslam_pose_rate",   # depends on vslam_process
-        "vslam_params",      # deployed by step 16 (vslam-config)
-        "oakd_vslam_config", # deployed by step 16 (vslam-config)
-        "vslam_confidence",  # depends on vslam_process
-    }
     blocking = [f for f in critical_fails if f not in _DEFERRED_CHECKS]
     deferred = [f for f in critical_fails if f in _DEFERRED_CHECKS]
 
@@ -1015,11 +1045,15 @@ def _run_verify(client: JetsonClient, bctx: BringupContext) -> None:
 
 def _service_active(client: JetsonClient) -> bool:
     try:
-        result = client.run(
-            ["systemctl", "--user", "is-active", "mower-health.service"],
+        r_active = client.run(
+            ["systemctl", "is-active", "mower-health.service"],
             timeout=10,
         )
-        return result.ok
+        r_enabled = client.run(
+            ["systemctl", "is-enabled", "mower-health.service"],
+            timeout=10,
+        )
+        return r_active.ok and r_enabled.ok
     except SshError:
         return False
 
@@ -1029,11 +1063,25 @@ def _run_service(client: JetsonClient, bctx: BringupContext) -> None:
         bctx.console.print("  Skipped by operator.")
         return
 
+    user = client.endpoint.user
+    home = f"/home/{user}"
+
+    # Cleanup stale user-level units (non-elevated)
+    bctx.console.print("  Cleaning up stale user-level units…")
+    try:
+        client.run(
+            [f"~/.local/bin/mower-jetson service cleanup-user-units --unit {UNIT_NAME}"],
+            timeout=30,
+        )
+    except SshError:
+        pass  # Idempotent — ignore errors
+
     bctx.console.print("  Installing service…")
     try:
         result = client.run(
             [
-                "~/.local/bin/mower-jetson service install --yes",
+                f"sudo ~/.local/bin/mower-jetson service install --yes"
+                f" --target-user {user} --target-home {home}",
             ],
             timeout=60,
         )
@@ -1050,7 +1098,7 @@ def _run_service(client: JetsonClient, bctx: BringupContext) -> None:
     try:
         result = client.run(
             [
-                "~/.local/bin/mower-jetson service start",
+                "sudo systemctl start mower-health.service",
             ],
             timeout=120,
         )
@@ -1201,21 +1249,146 @@ def _run_vslam_config(client: JetsonClient, bctx: BringupContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step: vslam-db-check
+# ---------------------------------------------------------------------------
+
+# Maximum acceptable DB size: 10 GiB
+_RTABMAP_DB_MAX_BYTES = 10 * 1024 * 1024 * 1024  # 10737418240
+
+
+def _db_check_done(_client: JetsonClient) -> bool:
+    return False  # Always runs — cheap integrity check
+
+
+def _run_db_check(client: JetsonClient, bctx: BringupContext) -> None:
+    """Check RTAB-Map DB integrity; quarantine on failure.
+
+    Never raises — bringup continues regardless of outcome.
+    """
+    log = get_logger("bringup").bind(op="vslam-db-check")
+    db_path = "~/.ros/rtabmap.db"
+
+    # 1. Check if DB exists
+    try:
+        result = client.run(["test", "-f", db_path], timeout=15)
+    except SshError:
+        bctx.console.print("  DB absent (SSH error during check) — PASS.")
+        return
+
+    if not result.ok:
+        bctx.console.print("  DB absent — PASS (fresh install).")
+        return
+
+    # 2. Size sanity check
+    try:
+        result = client.run(["stat", "-c", "%s", db_path], timeout=15)
+    except SshError as exc:
+        log.warning("db_check_stat_failed", error=str(exc))
+        bctx.console.print(f"  [yellow]stat failed:[/yellow] {exc} — quarantining.")
+        _quarantine_db(client, bctx, log, db_path)
+        return
+
+    if not result.ok:
+        log.warning("db_check_stat_nonzero", returncode=result.returncode)
+        bctx.console.print("  [yellow]stat returned non-zero — quarantining.[/yellow]")
+        _quarantine_db(client, bctx, log, db_path)
+        return
+
+    try:
+        size = int(result.stdout.strip())
+    except (ValueError, TypeError):
+        log.warning("db_check_size_parse_failed", stdout=result.stdout.strip())
+        bctx.console.print("  [yellow]Could not parse DB size — quarantining.[/yellow]")
+        _quarantine_db(client, bctx, log, db_path)
+        return
+
+    if size == 0:
+        log.warning("db_check_empty", size=size, path=db_path)
+        bctx.console.print("  [yellow]DB is 0 bytes — quarantining.[/yellow]")
+        _quarantine_db(client, bctx, log, db_path)
+        return
+
+    if size > _RTABMAP_DB_MAX_BYTES:
+        log.warning("db_check_too_large", size=size, max=_RTABMAP_DB_MAX_BYTES, path=db_path)
+        bctx.console.print(
+            f"  [yellow]DB too large ({size} bytes > 10 GiB) — quarantining.[/yellow]"
+        )
+        _quarantine_db(client, bctx, log, db_path)
+        return
+
+    # 3. PRAGMA integrity_check
+    try:
+        result = client.run(
+            ["sqlite3", db_path, "PRAGMA integrity_check;"],
+            timeout=60,
+        )
+    except SshError as exc:
+        log.warning("db_check_pragma_failed", error=str(exc))
+        bctx.console.print(f"  [yellow]sqlite3 PRAGMA failed:[/yellow] {exc} — quarantining.")
+        _quarantine_db(client, bctx, log, db_path)
+        return
+
+    pragma_output = result.stdout.strip()
+    if pragma_output == "ok":
+        bctx.console.print("  DB integrity check — PASS.")
+        return
+
+    log.warning("db_check_integrity_failed", pragma_output=pragma_output, path=db_path)
+    bctx.console.print(
+        f"  [yellow]PRAGMA integrity_check returned:[/yellow] {pragma_output!r} — quarantining."
+    )
+    _quarantine_db(client, bctx, log, db_path)
+
+
+def _quarantine_db(
+    client: JetsonClient, bctx: BringupContext, log: Any, db_path: str
+) -> None:
+    """Rename corrupt DB to timestamped quarantine name."""
+    quarantine_cmd = (
+        f"mv {db_path} {db_path}.corrupt-$(date -u +%Y%m%dT%H%M%SZ)"
+    )
+    try:
+        result = client.run(["bash", "-c", quarantine_cmd], timeout=15)
+        if result.ok:
+            log.warning("db_quarantined", path=db_path)
+            bctx.console.print("  Quarantined corrupt DB (renamed with timestamp).")
+        else:
+            log.warning("db_quarantine_mv_failed", returncode=result.returncode)
+            bctx.console.print(
+                f"  [yellow]Quarantine mv failed (rc={result.returncode}) "
+                f"— bringup continues.[/yellow]"
+            )
+    except SshError as exc:
+        log.warning("db_quarantine_ssh_error", error=str(exc))
+        bctx.console.print(
+            f"  [yellow]Quarantine SSH error:[/yellow] {exc} — bringup continues."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Step: vslam-services
 # ---------------------------------------------------------------------------
 
 
 def _vslam_services_active(client: JetsonClient) -> bool:
     try:
-        r1 = client.run(
-            ["systemctl", "--user", "is-active", "mower-vslam.service"],
+        r1_active = client.run(
+            ["systemctl", "is-active", "mower-vslam.service"],
             timeout=10,
         )
-        r2 = client.run(
-            ["systemctl", "--user", "is-active", "mower-vslam-bridge.service"],
+        r1_enabled = client.run(
+            ["systemctl", "is-enabled", "mower-vslam.service"],
             timeout=10,
         )
-        return r1.ok and r2.ok
+        r2_active = client.run(
+            ["systemctl", "is-active", "mower-vslam-bridge.service"],
+            timeout=10,
+        )
+        r2_enabled = client.run(
+            ["systemctl", "is-enabled", "mower-vslam-bridge.service"],
+            timeout=10,
+        )
+        return r1_active.ok and r1_enabled.ok and r2_active.ok and r2_enabled.ok
     except SshError:
         return False
 
@@ -1227,10 +1400,29 @@ def _run_vslam_services(client: JetsonClient, bctx: BringupContext) -> None:
         bctx.console.print("  Skipped by operator.")
         return
 
+    user = client.endpoint.user
+    home = f"/home/{user}"
+
+    # Cleanup stale user-level units (non-elevated, before sudo install)
+    bctx.console.print("  Cleaning up stale user-level units…")
+    try:
+        client.run(
+            [
+                f"~/.local/bin/mower-jetson service cleanup-user-units"
+                f" --unit {VSLAM_UNIT_NAME} --unit {VSLAM_BRIDGE_UNIT_NAME}",
+            ],
+            timeout=30,
+        )
+    except SshError:
+        pass  # Idempotent — ignore errors
+
     bctx.console.print("  Installing mower-vslam service…")
     try:
         result = client.run(
-            ["~/.local/bin/mower-jetson vslam install --yes"],
+            [
+                f"sudo ~/.local/bin/mower-jetson vslam install --yes"
+                f" --target-user {user} --target-home {home}",
+            ],
             timeout=120,
         )
     except SshError as exc:
@@ -1247,7 +1439,10 @@ def _run_vslam_services(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Installing mower-vslam-bridge service…")
     try:
         result = client.run(
-            ["~/.local/bin/mower-jetson vslam bridge-install --yes"],
+            [
+                f"sudo ~/.local/bin/mower-jetson vslam bridge-install --yes"
+                f" --target-user {user} --target-home {home}",
+            ],
             timeout=120,
         )
     except SshError as exc:
@@ -1264,7 +1459,7 @@ def _run_vslam_services(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Starting VSLAM services…")
     try:
         result = client.run(
-            ["systemctl --user start mower-vslam.service mower-vslam-bridge.service"],
+            ["sudo systemctl start mower-vslam.service mower-vslam-bridge.service"],
             timeout=60,
         )
     except SshError as exc:
@@ -1311,6 +1506,11 @@ def _run_final_verify(client: JetsonClient, bctx: BringupContext) -> None:
         bctx.console.print("  [red]Jetson did not come back after 180s.[/red]")
         raise typer.Exit(code=3)
 
+    # Wait for VSLAM service to start and OAK-D firmware to upload.
+    # Research 016 Phase 4: FW upload (~8 s) + service start budget (~15 s).
+    bctx.console.print("  Waiting 30s for VSLAM service + OAK-D FW upload…")
+    time.sleep(30)
+
     # Poll mower-jetson probe --json every 10s for up to 120s
     bctx.console.print("  Polling remote probe (up to 120s)…")
     probe_deadline = time.monotonic() + 120
@@ -1343,17 +1543,6 @@ def _run_final_verify(client: JetsonClient, bctx: BringupContext) -> None:
             if c.get("status") == "fail" and c.get("severity") == "critical"
         ]
 
-        # Hardware-dependent checks that require physical devices (OAK-D).
-        _HW_DEPENDENT: set[str] = {
-            "health_service",
-            "vslam_process",
-            "vslam_bridge",
-            "vslam_socket_active",
-            "vslam_pose_rate",
-            "vslam_params",
-            "oakd_vslam_config",
-            "vslam_confidence",
-        }
         infra_fails = [f for f in critical_fails if f not in _HW_DEPENDENT]
         if not infra_fails:
             break
@@ -1509,6 +1698,12 @@ BRINGUP_STEPS: list[BringupStep] = [
         needs_confirm=True,
     ),
     BringupStep(
+        name="vslam-db-check",
+        description="RTAB-Map DB integrity check",
+        check=lambda c: _db_check_done(c),
+        execute=lambda c, b: _run_db_check(c, b),
+    ),
+    BringupStep(
         name="vslam-services",
         description="VSLAM + bridge systemd services",
         check=lambda c: _vslam_services_active(c),
@@ -1559,7 +1754,7 @@ def bringup_command(
     strict_host_keys: str = typer.Option("accept-new", "--strict-host-keys"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts."),
 ) -> None:
-    """Automated end-to-end Jetson provisioning (19 steps).
+    """Automated end-to-end Jetson provisioning (20 steps).
 
     Walks through SSH check, hardening, build-dep install, C++ builds,
     uv/Python install, CLI deploy, VSLAM config, service setup, and

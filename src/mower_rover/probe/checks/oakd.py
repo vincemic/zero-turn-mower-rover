@@ -1,53 +1,48 @@
-"""OAK-D camera presence check — scans USB vendor IDs and link speed.
+"""OAK-D camera presence check — service-aware PID + speed state machine.
 
-The OAK-D's MyriadX bootloader enumerates at USB 2.0 (480 Mbps) in sysfs
-before DepthAI uploads firmware.  After firmware boot the device re-enumerates
-at SuperSpeed (5 Gbps).  When running on a live Jetson (sysroot ``/``) and
-sysfs reports < 5 Gbps, the check falls back to DepthAI
-``device.getUsbSpeed()`` which triggers firmware upload.
+Cross-references ``systemctl is-active mower-vslam.service`` with the USB
+product ID visible in sysfs to classify five operational states:
+
+- active + f63b  → PASS  (firmware booted, USB 3.x SuperSpeed)
+- active + 2485  → FAIL  (crash-loop suspected — bootloader PID with active service)
+- active + absent → FAIL  (service active but camera missing)
+- inactive + 2485 → PASS  (idle in bootloader, service stopped)
+- inactive + absent → PASS (camera not present and service not running)
+
+Does NOT invoke ``dai.Device()`` when the VSLAM service is active (FR-11).
 """
 
 from __future__ import annotations
 
 import glob
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from mower_rover.probe.registry import Severity, register
 
 _OAK_VENDOR_ID = "03e7"
+_PID_BOOTLOADER = "2485"
+_PID_BOOTED = "f63b"
 _MIN_USB_SPEED_MBPS = 5000
 
-# Map DepthAI UsbSpeed enum names to approximate Mbps.
-_DAI_SPEED_MBPS: dict[str, int] = {
-    "SUPER_PLUS": 10000,
-    "SUPER": 5000,
-    "HIGH": 480,
-    "FULL": 12,
-    "LOW": 1,
-}
 
-
-def _depthai_usb_speed() -> int | None:
-    """Try to connect via DepthAI and return the negotiated speed in Mbps.
-
-    Returns ``None`` if depthai is not installed or connection fails.
-    """
+def _vslam_service_active() -> bool:
+    """Return True if mower-vslam.service is active (system-level)."""
     try:
-        import depthai as dai
-    except ImportError:
-        return None
-    try:
-        dev = dai.Device()
-        speed_name = dev.getUsbSpeed().name
-        dev.close()
-        return _DAI_SPEED_MBPS.get(speed_name, 0)
-    except Exception:  # noqa: BLE001
-        return None
+        result = subprocess.run(
+            ["systemctl", "is-active", "mower-vslam.service"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
 
 
-@register("oakd", severity=Severity.CRITICAL, depends_on=("jetpack_version",))
-def check_oakd(sysroot: Path) -> tuple[bool, str]:
-    """Detect a Luxonis OAK device by USB vendor ID ``03e7`` and check link speed."""
+def _find_oakd_device(sysroot: Path) -> tuple[str | None, int | None]:
+    """Scan sysfs for OAK-D device. Returns (idProduct, speed) or (None, None)."""
     pattern = str(sysroot / "sys" / "bus" / "usb" / "devices" / "*" / "idVendor")
     for vendor_file in glob.glob(pattern):
         try:
@@ -56,28 +51,54 @@ def check_oakd(sysroot: Path) -> tuple[bool, str]:
             continue
         if vid == _OAK_VENDOR_ID:
             device_dir = Path(vendor_file).parent
+            # Read product ID
+            pid_file = device_dir / "idProduct"
+            try:
+                pid = pid_file.read_text(encoding="utf-8").strip().lower()
+            except OSError:
+                pid = None
+            # Read link speed
             speed_file = device_dir / "speed"
             try:
                 speed = int(speed_file.read_text(encoding="utf-8").strip())
             except (OSError, ValueError):
-                return True, f"OAK device found (vendor {_OAK_VENDOR_ID}, speed unknown)"
-            if speed >= _MIN_USB_SPEED_MBPS:
-                return True, f"OAK device found at USB {speed} Mbps"
-            # sysfs shows pre-boot speed; try DepthAI on a live system.
-            if sysroot == Path("/"):
-                dai_speed = _depthai_usb_speed()
-                if dai_speed is not None and dai_speed >= _MIN_USB_SPEED_MBPS:
-                    return True, (
-                        f"OAK device at USB {dai_speed} Mbps via DepthAI"
-                        f" (sysfs pre-boot: {speed} Mbps)"
-                    )
-                if dai_speed is not None:
-                    return False, (
-                        f"OAK device at USB {dai_speed} Mbps via DepthAI"
-                        f" (need \u2265{_MIN_USB_SPEED_MBPS})"
-                    )
-            return False, f"OAK device at USB {speed} Mbps (need \u2265{_MIN_USB_SPEED_MBPS})"
-    return False, "No OAK device detected"
+                speed = None
+            return pid, speed
+    return None, None
+
+
+@register("oakd", severity=Severity.CRITICAL, depends_on=("jetpack_version",))
+def check_oakd(
+    sysroot: Path,
+    *,
+    _service_active_fn: Callable[[], bool] | None = None,
+) -> tuple[bool, str]:
+    """Service-aware OAK-D state machine (Q6 cross-reference table)."""
+    service_active_fn = _service_active_fn or _vslam_service_active
+    active = service_active_fn()
+    pid, speed = _find_oakd_device(sysroot)
+
+    # Determine device presence category
+    if pid == _PID_BOOTED:
+        # Camera is booted (firmware loaded)
+        speed_str = f" at USB {speed} Mbps" if speed is not None else ""
+        if active:
+            return True, f"OAK-D booted (PID f63b){speed_str}, service active"
+        # inactive + f63b: unusual but acceptable (someone stopped service)
+        return True, f"OAK-D booted (PID f63b){speed_str}, service inactive"
+    elif pid == _PID_BOOTLOADER:
+        # Camera in bootloader
+        if active:
+            return False, (
+                "Crash-loop suspected: OAK-D in bootloader (PID 2485) "
+                "but mower-vslam.service is active"
+            )
+        return True, "OAK-D idle in bootloader (PID 2485), service stopped"
+    else:
+        # Camera absent (no vendor 03e7 found)
+        if active:
+            return False, "mower-vslam.service active but no OAK-D camera detected in sysfs"
+        return True, "OAK-D not present, service not running"
 
 
 _VSLAM_CONFIG_PATH = "etc/mower/vslam.yaml"

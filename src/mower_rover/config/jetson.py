@@ -43,7 +43,7 @@ class JetsonConfig:
     log_dir: Path | None = None
     oakd_required: bool = False
     health_interval_s: int = 60
-    service_user_level: bool = True
+    service_user_level: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -79,7 +79,7 @@ def _coerce(raw: dict[str, Any]) -> JetsonConfig:
         raise JetsonConfigError(
             f"health_interval_s must be a positive integer, got {health_interval_s!r}"
         )
-    service_user_level = raw.get("service_user_level", True)
+    service_user_level = raw.get("service_user_level", False)
     if not isinstance(service_user_level, bool):
         raise JetsonConfigError(
             f"service_user_level must be bool, got {type(service_user_level).__name__}"

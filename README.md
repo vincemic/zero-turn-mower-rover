@@ -134,6 +134,112 @@ Default Jetson config path: `~/.config/mower-rover/jetson.yaml`.
 | `mower-vslam.service` | — | RTAB-Map SLAM node (C++ binary) |
 | `mower-vslam-bridge.service` | — | VSLAM → MAVLink bridge (Python) |
 
+All three are **system-level** units installed to `/etc/systemd/system/`. They are `enable`d at install time so they start automatically on boot.
+
+#### VSLAM service architecture
+
+The VSLAM service holds a persistent `dai::Device()` connection to the OAK-D Pro. Without it, the camera stays in its bootloader state (PID `03e7:2485`, USB 2.0) because DepthAI firmware is RAM-volatile and must be uploaded every boot.
+
+**Unit files:**
+
+```
+/etc/systemd/system/mower-vslam.service
+/etc/systemd/system/mower-vslam-bridge.service
+/etc/systemd/system/mower-health.service
+```
+
+**Inspecting service status:**
+
+```bash
+sudo systemctl status mower-vslam.service
+sudo journalctl -u mower-vslam -f          # live logs
+sudo journalctl -u mower-vslam-bridge -f   # bridge logs
+```
+
+**Expected steady-state (60 s after boot):**
+
+- `mower-vslam.service` — `enabled` + `active (running)`
+- OAK-D sysfs: `idProduct=f63b`, `speed=5000` (USB 3.x SuperSpeed)
+- Socket exists: `/run/mower/vslam-pose.sock`
+
+The `/run/mower/` directory is created natively by `RuntimeDirectory=mower` in the system-level VSLAM unit — no `tmpfiles.d` or manual `mkdir` required.
+
+**Corrupt RTAB-Map database quarantine:**
+
+If `~/.ros/rtabmap.db` fails an integrity check during bringup, it is renamed to `~/.ros/rtabmap.db.corrupt-{ISO8601_TIMESTAMP}` and RTAB-Map creates a fresh database on next start. To clean up old quarantine files:
+
+```bash
+ls ~/.ros/rtabmap.db.corrupt-*          # list quarantined DBs
+rm ~/.ros/rtabmap.db.corrupt-*          # remove all (safe — originals were corrupt)
+```
+
+#### Rolling back to user-level units
+
+If you need to revert the system-level service migration (e.g., for testing or debugging with user-level units):
+
+1. Stop the system-level services:
+
+   ```bash
+   sudo systemctl stop mower-vslam-bridge.service mower-vslam.service mower-health.service
+   ```
+
+2. Disable them (removes `WantedBy` symlinks):
+
+   ```bash
+   sudo systemctl disable mower-vslam-bridge.service mower-vslam.service mower-health.service
+   ```
+
+3. Remove the unit files:
+
+   ```bash
+   sudo rm /etc/systemd/system/mower-{health,vslam,vslam-bridge}.service
+   ```
+
+4. Reload the systemd daemon:
+
+   ```bash
+   sudo systemctl daemon-reload
+   ```
+
+5. On the operator laptop, set the config flag to user-level:
+
+   - Linux/macOS: edit `~/.config/mower-rover/jetson.yaml`
+   - Windows: edit `%APPDATA%\mower-rover\jetson.yaml`
+
+   ```yaml
+   service_user_level: true
+   ```
+
+6. Re-run bringup from the service step:
+
+   ```bash
+   mower jetson bringup --from-step service
+   ```
+
+The cleanup pre-step is a no-op in this direction (no user units exist to remove), and the install path will write to `~/.config/systemd/user/`.
+
+#### Steady-state verification
+
+After a fresh bringup or reboot, verify the system has converged (wait ~60 s):
+
+```bash
+# Probe reports OAK-D booted and VSLAM active
+mower-jetson probe --json | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+checks = {c['name']: c for c in d['checks']}
+oakd = checks.get('oakd', {})
+print(f\"oakd: {oakd.get('status', 'MISSING')}\")
+assert oakd.get('status') == 'PASS', f\"oakd not PASS: {oakd}\"
+"
+
+# No service restarts in last 60 s
+sudo systemctl show mower-vslam --property=NRestarts --value  # should be 0
+
+# IPC socket exists
+test -S /run/mower/vslam-pose.sock && echo "socket OK" || echo "socket MISSING"
+```
+
 ### Health monitoring & pre-flight probes
 
 The `mower-jetson probe` command runs dependency-ordered checks:

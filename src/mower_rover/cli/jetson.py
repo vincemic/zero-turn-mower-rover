@@ -15,6 +15,7 @@ units are intentionally deferred until a phase needs one.
 
 from __future__ import annotations
 
+import getpass
 import json as _json
 import os
 import platform
@@ -56,6 +57,7 @@ from mower_rover.service.unit import (
     UNIT_NAME,
     VSLAM_BRIDGE_UNIT_NAME,
     VSLAM_UNIT_NAME,
+    _cleanup_user_unit,
     install_service,
     install_vslam_bridge_service,
     install_vslam_service,
@@ -474,6 +476,12 @@ def service_install_command(
     config: Path | None = typer.Option(
         None, "--config", "-c", help="Override config path."
     ),
+    target_user: str | None = typer.Option(
+        None, "--target-user", help="User for the unit's User= line (default: current user)."
+    ),
+    target_home: str | None = typer.Option(
+        None, "--target-home", help="Home dir for the unit's WorkingDirectory= (default: current home)."
+    ),
 ) -> None:
     """Install the mower-health systemd service."""
     obj = ctx.obj or {}
@@ -481,7 +489,12 @@ def service_install_command(
     level = user_level if user_level is not None else cfg.service_user_level
     safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
     try:
-        install_service(safety, user_level=level)
+        install_service(
+            safety,
+            user_level=level,
+            target_user=target_user,
+            target_home=target_home,
+        )
     except ConfirmationAborted:
         typer.echo("Aborted.", err=True)
         raise typer.Exit(code=1) from None
@@ -584,6 +597,30 @@ def service_run_command(
     run_daemon(health_interval_s=interval, sysroot=Path("/"))
 
 
+@service_app.command("cleanup-user-units")
+def service_cleanup_user_units_command(
+    ctx: typer.Context,
+    unit: list[str] = typer.Option(
+        ..., "--unit", help="Unit name(s) to clean up (e.g., mower-health)."
+    ),
+) -> None:
+    """Remove stale user-level systemd units (migration helper).
+
+    Idempotent: safe to run even if no user-level units exist.
+    Runs as the current unprivileged user (no sudo required).
+    """
+    log = get_logger("cli-jetson").bind(op="cleanup_user_units")
+    any_cleaned = False
+    for name in unit:
+        cleaned = _cleanup_user_unit(name)
+        if cleaned:
+            any_cleaned = True
+            typer.echo(f"Cleaned up user-level unit: {name}.service")
+    if not any_cleaned:
+        typer.echo("No stale user-level units found.")
+    log.info("cleanup_user_units_done", units=unit, any_cleaned=any_cleaned)
+
+
 # --- vslam -------------------------------------------------------------------
 
 
@@ -592,6 +629,12 @@ def vslam_install_command(
     ctx: typer.Context,
     user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+    target_user: str | None = typer.Option(
+        None, "--target-user", help="User for the unit's User= line (default: current user)."
+    ),
+    target_home: str | None = typer.Option(
+        None, "--target-home", help="Home dir for the unit's WorkingDirectory= (default: current home)."
+    ),
 ) -> None:
     """Install the mower-vslam systemd service."""
     obj = ctx.obj or {}
@@ -599,7 +642,12 @@ def vslam_install_command(
     level = user_level if user_level is not None else cfg.service_user_level
     safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
     try:
-        install_vslam_service(safety, user_level=level)
+        install_vslam_service(
+            safety,
+            user_level=level,
+            target_user=target_user,
+            target_home=target_home,
+        )
     except ConfirmationAborted:
         typer.echo("Aborted.", err=True)
         raise typer.Exit(code=1) from None
@@ -682,6 +730,12 @@ def vslam_bridge_install_command(
     ctx: typer.Context,
     user_level: bool | None = typer.Option(None, "--user-level/--system-level"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+    target_user: str | None = typer.Option(
+        None, "--target-user", help="User for the unit's User= line (default: current user)."
+    ),
+    target_home: str | None = typer.Option(
+        None, "--target-home", help="Home dir for the unit's WorkingDirectory= (default: current home)."
+    ),
 ) -> None:
     """Install the mower-vslam-bridge systemd service."""
     obj = ctx.obj or {}
@@ -689,7 +743,12 @@ def vslam_bridge_install_command(
     level = user_level if user_level is not None else cfg.service_user_level
     safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
     try:
-        install_vslam_bridge_service(safety, user_level=level)
+        install_vslam_bridge_service(
+            safety,
+            user_level=level,
+            target_user=target_user,
+            target_home=target_home,
+        )
     except ConfirmationAborted:
         typer.echo("Aborted.", err=True)
         raise typer.Exit(code=1) from None
