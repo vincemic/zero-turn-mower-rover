@@ -671,7 +671,7 @@ For repo integration, the EdgeTX YAML exports (3 files: `radio.yml`, `model00.ym
 8. **Yaapu config uses all defaults** — English, m/s, default HUD panels, battery alerts at 3.75/3.50 V/cell, PX4 disabled (correct for ArduPilot)
 9. **No custom sensor file exists** (`mow_sensors.lua` missing) — the alternate view custom sensors screen is unused
 10. **Telemetry log proves ArduPilot Rover** — MAV_TYPE=10, dual 4S batteries (6000+3300 mAh), armed in LOITER, 15 sats
-11. **ArduPilot config inferred from Taranis:** skid-steer (SERVO1/SERVO3 = throttle left/right), FLTMODE_CH likely 5, RC7 likely arm/disarm, SBUS protocol, FrSky S.Port telemetry passthrough
+11. **ArduPilot config confirmed from Pixhawk params (2026-05-01):** skid-steer (`FRAME_CLASS=1`, `SERVO1_FUNCTION=73`, `SERVO3_FUNCTION=74`), `MODE_CH=9` (SA switch, NOT CH5/SG as inferred from Taranis model labeling), `RC7_OPTION=153` (arm/disarm confirmed), `RC_PROTOCOLS=1` (SBUS), `SERIAL2_PROTOCOL=10` (FrSky S.Port passthrough at 57600 baud)
 12. **Two models confirmed:** "mow" (model01, ID 2) and "mow2" (model00, ID 1, active) — nearly identical, differ only in rudder trim (6 vs 10) and mow2's extra "cut" input
 13. **EdgeTX YAML committed to repo** — `config/taranis/` with radio.yml + two model YAMLs + README (4 files, 1136 lines)
 
@@ -682,7 +682,7 @@ For repo integration, the EdgeTX YAML exports (3 files: `radio.yml`, `model00.ym
 - ✅ **DONE — `config/taranis/README.md` created** with channel map table, key settings, model differences, and hardware summary
 - **Still needed — Commit SD card artifacts**: Yaapu configs (`mow.cfg`, `mow2.cfg`), telemetry log (`.plog`), version marker, and raw model binary when SD card is next mounted
 - **Still needed — Create `mow_sensors.lua`** for rover-specific telemetry sensors (GSpd, Hdg, Alt, VSpd, VFAS, Fuel) once the FrSky telemetry link is operational
-- **Still needed — Verify ArduPilot channel mapping** against actual Pixhawk params to confirm the Taranis-inferred `FLTMODE_CH=5`, `RC7_OPTION=arm`, and `RCMAP_*` values
+- ✅ **DONE — ArduPilot channel mapping verified** (2026-05-01 param dump): `MODE_CH=9` (SA 3-pos switch selects flight mode — NOT CH5/SG as the Taranis model label implied), `RC7_OPTION=153` (arm/disarm confirmed on SF), `RCMAP_ROLL=1, RCMAP_YAW=2, RCMAP_PITCH=3, RCMAP_THROTTLE=4` (standard). No `RCx_OPTION` set on CH6/CH8/CH9/CH10 — those channels have no ArduPilot auxiliary function assigned.
 - **Do NOT commit** stock sound packs (157 MB), BMP images, old 2.2 backup (132 MB), firmware binaries, compiled Lua scripts, or stock tools
 - **Consider EdgeTX migration** — OpenTX is abandoned (last release 2.3.15, April 2022); EdgeTX is the actively maintained successor, supports X9D+, and stores models in diffable YAML
 - **Consider upgrading Yaapu** if a newer version adds rover-relevant features (current 1.8.0 is from 2020)
@@ -692,10 +692,14 @@ For repo integration, the EdgeTX YAML exports (3 files: `radio.yml`, `model00.ym
 - ~~What are the exact channel maps, mixer definitions, and switch assignments in the "mow" model?~~ **RESOLVED** — Fully decoded via EdgeTX Companion v2.10.5. See channel map in `config/taranis/README.md` and YAML models in `config/taranis/MODELS/`.
 - ~~Is there a second model "mow2" defined in the transmitter EEPROM, or is `mow2.cfg` just a backup copy?~~ **RESOLVED** — Yes, both "mow" (model01, ID 2) and "mow2" (model00, ID 1) are distinct models in the transmitter. "mow2" is the active model (selected in radio settings). They are nearly identical — mow2 has an extra "cut" input (SD → CH9, gated by !SA2) and a different rudder trim value (10 vs 6).
 - Should the Yaapu script be upgraded beyond 1.8.0, and if so, does a newer version add rover-specific features or break compatibility with OpenTX 2.3?
-- Are the battery capacity values from the telemetry log (6000 + 3300 mAh) still accurate for the current hardware configuration?
+- ~~Are the battery capacity values from the telemetry log (6000 + 3300 mAh) still accurate for the current hardware configuration?~~ **PARTIALLY RESOLVED** — Pixhawk params show `BATT_CAPACITY=6300` (single battery configured, BATT2_MONITOR=0 disabled). The 2020 telemetry log showed dual batteries (6000+3300); the current config has only one battery monitored at 6300 mAh. Either the second battery was removed or just its monitoring was disabled.
 - Should the transmitter be migrated from OpenTX 2.3 to EdgeTX? (OpenTX is abandoned since April 2022; EdgeTX is actively maintained, supports X9D+, and uses YAML model storage)
-- What ArduPilot `RC*_OPTION` values correspond to CH6 (SC), CH8 (SB), CH9 (SA/"cut"), and CH10 (SH)? The Taranis config assigns switches but the ArduPilot function mapping requires reading Pixhawk params.
-- Does the "cut" input on SD in model mow2 map to `SERVO5` (ignition kill) or `SERVO7` (blade clutch) on the ArduPilot side?
+- ~~What ArduPilot `RC*_OPTION` values correspond to CH6 (SC), CH8 (SB), CH9 (SA/"cut"), and CH10 (SH)?~~ **RESOLVED** — Only `RC7_OPTION=153` (arm/disarm) is set. All other channels (`RC5_OPTION` through `RC10_OPTION` except RC7) = 0 (no function). CH9/SA is used as `MODE_CH=9` (flight mode selector) — it doesn't need an RCx_OPTION because ArduPilot reads it directly as the mode switch. CH6/SC, CH8/SB, CH10/SH have no assigned ArduPilot function.
+- ~~Does the "cut" input on SD in model mow2 map to `SERVO5` (ignition kill) or `SERVO7` (blade clutch) on the ArduPilot side?~~ **RESOLVED** — Neither, currently. The Taranis mow2 model's "cut" input on SD routes to CH9, but ArduPilot uses CH9 solely as `MODE_CH` (flight mode). The "cut" function is not currently mapped to any ArduPilot relay/servo output. `SERVO5_FUNCTION=0` (disabled), `SERVO6_FUNCTION=58` (scripting1), `SERVO7_FUNCTION=56` (scripting3), `SERVO8_FUNCTION=55` (scripting2). Relay-based ignition/blade control is not yet configured.
+- **NEW:** `ARMING_CHECK=0` — ALL arming pre-arm checks are disabled. This should be re-enabled before field testing (at minimum GPS lock, EKF, and battery checks).
+- **NEW:** `FENCE_ACTION=1` (RTL) and `FS_EKF_ACTION=1` (RTL) need to be changed to `2` (Hold) per project safety docs — RTL drives straight through obstacles.
+- **NEW:** Flight mode mapping via `MODE_CH=9` / SA switch: MODE1=Manual, MODE2=Manual, MODE3=Manual, MODE4=Acro, MODE5=Manual, MODE6=Auto. With a 3-pos switch (SA), effective modes are likely Manual (SA-up) / Acro (SA-mid) / Auto (SA-down). Consider adding Hold to one of the intermediate positions for safety.
+- **NEW:** SERVO6/7/8 use **RCPassThru** functions (not scripting outputs as initially reported): `SERVO6_FUNCTION=58` (RCIn8 → SB), `SERVO7_FUNCTION=56` (RCIn6 → SC), `SERVO8_FUNCTION=55` (RCIn5 → SG, SF-gated). This gives the operator direct switch control over relay outputs from the Taranis — likely starter (SB), blade clutch (SC), and ignition kill (SG, only when armed).
 
 ## Standards Applied
 
