@@ -221,12 +221,20 @@ def install_service(
         log.info("dry_run_install_service")
         return
 
-    mower_jetson = (
-        shutil.which("mower-jetson")
-        or str(Path.home() / ".local" / "bin" / "mower-jetson")
-    )
     user = target_user or getpass.getuser()
     home = target_home or str(Path.home())
+    # When target_home is provided (e.g. install run via sudo), prefer the
+    # target user's binary over whatever shutil.which resolves under the
+    # caller's environment (which may be /root/.local/bin under sudo).
+    if target_home is not None:
+        # Use forward-slash join: this path is written into a Linux systemd
+        # unit file, so Path() on Windows would produce backslashes.
+        mower_jetson = f"{target_home.rstrip('/')}/.local/bin/mower-jetson"
+    else:
+        mower_jetson = (
+            shutil.which("mower-jetson")
+            or str(Path.home() / ".local" / "bin" / "mower-jetson")
+        )
     cfg = load_jetson_config()
 
     content = generate_unit_file(
@@ -388,12 +396,15 @@ def install_vslam_bridge_service(
         log.info("dry_run_install_vslam_bridge_service")
         return
 
-    mower_jetson = (
-        shutil.which("mower-jetson")
-        or str(Path.home() / ".local" / "bin" / "mower-jetson")
-    )
     user = target_user or getpass.getuser()
     home = target_home or str(Path.home())
+    if target_home is not None:
+        mower_jetson = f"{target_home.rstrip('/')}/.local/bin/mower-jetson"
+    else:
+        mower_jetson = (
+            shutil.which("mower-jetson")
+            or str(Path.home() / ".local" / "bin" / "mower-jetson")
+        )
 
     content = generate_vslam_bridge_unit_file(
         mower_jetson_path=mower_jetson,

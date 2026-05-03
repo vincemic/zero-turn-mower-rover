@@ -988,6 +988,76 @@ class TestSystemLevelInstallTargetUser:
         assert "User=root" not in content
 
 
+class TestSystemLevelInstallExecStartHonorsTargetHome:
+    """Regression: ExecStart=/path/to/mower-jetson must come from target_home,
+    not from Path.home() (which is /root under sudo) and not from
+    shutil.which (which can resolve to a stale /root/.local/bin binary).
+    """
+
+    def test_install_service_execstart_uses_target_home_under_sudo(
+        self, tmp_path: Path,
+    ) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_dir = tmp_path / "etc" / "systemd" / "system"
+
+        with (
+            patch("mower_rover.service.unit.unit_dir", return_value=fake_dir),
+            # Simulate the worst case: shutil.which finds a binary in
+            # /root/.local/bin AND Path.home() is /root.  Without the fix,
+            # the unit file would contain ExecStart=/root/.local/bin/...
+            patch(
+                "mower_rover.service.unit.shutil.which",
+                return_value="/root/.local/bin/mower-jetson",
+            ),
+            patch("mower_rover.service.unit.getpass.getuser", return_value="root"),
+            patch("mower_rover.service.unit.Path.home", return_value=Path("/root")),
+            patch(
+                "mower_rover.service.unit.load_jetson_config",
+                return_value=JetsonConfig(),
+            ),
+            patch("mower_rover.service.unit.subprocess.run"),
+        ):
+            install_service(
+                ctx,
+                user_level=False,
+                target_user="vincent",
+                target_home="/home/vincent",
+            )
+
+        content = (fake_dir / f"{UNIT_NAME}.service").read_text(encoding="utf-8")
+        assert "ExecStart=/home/vincent/.local/bin/mower-jetson" in content
+        assert "/root/.local/bin/mower-jetson" not in content
+
+    def test_install_vslam_bridge_execstart_uses_target_home_under_sudo(
+        self, tmp_path: Path,
+    ) -> None:
+        ctx = SafetyContext(dry_run=False, assume_yes=True)
+        fake_dir = tmp_path / "etc" / "systemd" / "system"
+
+        with (
+            patch("mower_rover.service.unit.unit_dir", return_value=fake_dir),
+            patch(
+                "mower_rover.service.unit.shutil.which",
+                return_value="/root/.local/bin/mower-jetson",
+            ),
+            patch("mower_rover.service.unit.getpass.getuser", return_value="root"),
+            patch("mower_rover.service.unit.Path.home", return_value=Path("/root")),
+            patch("mower_rover.service.unit.subprocess.run"),
+        ):
+            install_vslam_bridge_service(
+                ctx,
+                user_level=False,
+                target_user="vincent",
+                target_home="/home/vincent",
+            )
+
+        content = (fake_dir / f"{VSLAM_BRIDGE_UNIT_NAME}.service").read_text(
+            encoding="utf-8"
+        )
+        assert "ExecStart=/home/vincent/.local/bin/mower-jetson" in content
+        assert "/root/.local/bin/mower-jetson" not in content
+
+
 # ---------------------------------------------------------------------------
 # _cleanup_user_unit helper (Phase 1 step 1.2)
 # ---------------------------------------------------------------------------

@@ -246,3 +246,49 @@ def test_run_streaming_timeout_raises(endpoint: JetsonEndpoint) -> None:
         pytest.raises(SshError, match="timed out"),
     ):
         client.run_streaming(["sleep", "9999"], timeout=0.1)
+
+
+def test_run_streaming_does_not_deadlock_on_large_stderr(
+    endpoint: JetsonEndpoint,
+) -> None:
+    """Regression: stderr must be drained concurrently with stdout.
+
+    The previous implementation read ``proc.stdout`` to EOF before reading
+    ``proc.stderr``.  When a remote build (cmake/make compiling a large CXX
+    translation unit) writes more than ~64 KiB to stderr, the OS pipe buffer
+    fills, the remote process blocks on its next stderr write, no further
+    stdout arrives, and the entire pipeline deadlocks indefinitely.
+
+    This test launches a real subprocess that writes a large stderr payload
+    and a small stdout payload, and asserts the call returns within a few
+    seconds with both streams fully captured.
+    """
+    import sys
+    import time
+
+    client = JetsonClient(endpoint, ssh_binary="ssh", scp_binary="scp")
+
+    # 256 KiB to stderr — well above any plausible pipe buffer (Linux 64 KiB,
+    # Windows 4 KiB).  Followed by a stdout flush so the test can verify both
+    # streams round-tripped.
+    payload = (
+        "import sys; "
+        "sys.stderr.write('X' * 262144); sys.stderr.flush(); "
+        "sys.stdout.write('done\\n'); sys.stdout.flush()"
+    )
+    real_proc = subprocess.Popen(  # noqa: S603 — fixed argv, test-only
+        [sys.executable, "-c", payload],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    start = time.monotonic()
+    with patch("mower_rover.transport.ssh.subprocess.Popen", return_value=real_proc):
+        result = client.run_streaming(["irrelevant"], timeout=10.0)
+    elapsed = time.monotonic() - start
+
+    assert result.ok, f"non-zero return: {result.returncode}, stderr={result.stderr[:200]}"
+    assert result.stdout == "done"
+    assert len(result.stderr) == 262144
+    assert elapsed < 5.0, f"streaming took {elapsed:.1f}s — likely deadlocked"

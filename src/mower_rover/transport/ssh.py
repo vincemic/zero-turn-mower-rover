@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -212,6 +213,25 @@ class JetsonClient:
 
         lines: list[str] = []
         assert proc.stdout is not None  # guaranteed by stdout=PIPE
+        assert proc.stderr is not None  # guaranteed by stderr=PIPE
+
+        # Drain stderr concurrently to avoid the OS pipe-buffer deadlock that
+        # occurs when a long-running build (cmake/make) writes more than
+        # ~64 KiB to stderr while we're blocked reading stdout.  Without this,
+        # the remote process eventually blocks on its next stderr write and
+        # the entire pipeline hangs forever.
+        stderr_chunks: list[str] = []
+
+        def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            for chunk in iter(lambda: proc.stderr.read(4096), ""):
+                stderr_chunks.append(chunk)
+
+        stderr_thread = threading.Thread(
+            target=_drain_stderr, name="ssh-stderr-drain", daemon=True
+        )
+        stderr_thread.start()
+
         for raw_line in proc.stdout:
             line = raw_line.rstrip("\n")
             lines.append(line)
@@ -223,11 +243,13 @@ class JetsonClient:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+            stderr_thread.join(timeout=5.0)
             raise SshError(
                 f"ssh streaming timed out after {timeout}s: {' '.join(remote_argv)}"
             ) from None
 
-        stderr = proc.stderr.read() if proc.stderr else ""
+        stderr_thread.join(timeout=5.0)
+        stderr = "".join(stderr_chunks)
         result = SshResult(
             argv=argv,
             returncode=proc.returncode,
