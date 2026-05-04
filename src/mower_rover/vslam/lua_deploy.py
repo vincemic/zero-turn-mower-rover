@@ -9,6 +9,7 @@ uploads when missing or outdated.  All FTP failures are logged as warnings
 from __future__ import annotations
 
 import contextlib
+import errno
 import importlib.resources
 import os
 import re
@@ -16,6 +17,42 @@ import tempfile
 from typing import TYPE_CHECKING
 
 from mower_rover.logging_setup.setup import get_logger
+
+# Common POSIX errnos returned by ArduPilot's FTP server in the FailErrno
+# (code 2) reply payload.  Translated to operator-friendly hints so the
+# ``lua_deploy_failed`` warning surfaces actionable causes instead of a
+# bare numeric code.
+_ERRNO_HINTS: dict[int, str] = {
+    errno.ENOSPC: "SD card full — delete old logs from /APM/LOGS",
+    errno.EACCES: "permission denied — check SD card write-protect",
+    errno.EROFS: "read-only filesystem — SD card may be locked",
+    errno.ENOENT: "parent directory missing",
+    errno.EIO: "SD card I/O error — card may be failing",
+    errno.ENOTDIR: "path component is not a directory",
+    errno.EISDIR: "target path is a directory, not a file",
+    errno.ENAMETOOLONG: "filename too long for filesystem",
+}
+
+
+def _decode_ftp_error(ret: object, op: str, path: str) -> str:
+    """Format an FTP NAK as ``"{op} {path}: <reason>"`` with errno hints.
+
+    When ``ret.error_code`` is ``FailErrno`` (2), include the POSIX errno
+    name and a human-readable hint from :data:`_ERRNO_HINTS` if known.
+    """
+    from pymavlink.mavftp import FtpError
+
+    code = ret.error_code
+    sys_err = getattr(ret, "system_error", None)
+    try:
+        name = FtpError(code).name
+    except ValueError:
+        name = f"code {code}"
+    if code == FtpError.FailErrno and sys_err is not None:
+        errno_name = errno.errorcode.get(sys_err, f"errno {sys_err}")
+        hint = _ERRNO_HINTS.get(sys_err, "see ArduPilot FTP server logs")
+        return f"{op} {path}: {name} ({errno_name}: {hint})"
+    return f"{op} {path}: {name}"
 
 if TYPE_CHECKING:
     pass  # pymavlink types are dynamic; avoid import-time failures on Windows
@@ -67,7 +104,7 @@ class _FTPSession:
 
         ret = self._ftp.cmd_list([path])
         if ret.error_code != FtpError.Success:
-            raise OSError(f"list {path}: FTP error {ret.error_code}")
+            raise OSError(_decode_ftp_error(ret, "list", path))
         return [entry.name for entry in self._ftp.list_result]
 
     def read_file(self, path: str) -> bytes:
@@ -86,10 +123,10 @@ class _FTPSession:
 
         ret = self._ftp.cmd_put([path, path], fh=BytesIO(data))
         if ret.error_code != FtpError.Success:
-            raise OSError(f"write {path}: FTP create error {ret.error_code}")
+            raise OSError(_decode_ftp_error(ret, "write-create", path))
         ret = self._ftp.process_ftp_reply("CreateFile", timeout=30)
         if ret.error_code != FtpError.Success:
-            raise OSError(f"write {path}: FTP transfer error {ret.error_code}")
+            raise OSError(_decode_ftp_error(ret, "write", path))
 
     def mkdir(self, path: str) -> None:
         """Create a directory on the remote SD card (idempotent)."""
@@ -97,7 +134,7 @@ class _FTPSession:
 
         ret = self._ftp.cmd_mkdir([path])
         if ret.error_code not in (FtpError.Success, FtpError.FileExists):
-            raise OSError(f"mkdir {path}: FTP error {ret.error_code}")
+            raise OSError(_decode_ftp_error(ret, "mkdir", path))
 
 
 def check_and_deploy_lua(conn: object) -> None:
