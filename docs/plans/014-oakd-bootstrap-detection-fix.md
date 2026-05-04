@@ -4,10 +4,11 @@ type: plan
 title: "OAK-D Bootstrap Detection Fix — Service-Enable, Runtime-Dir, and Probe Diagnostics"
 status: ✅ Complete
 created: "2026-05-02"
-updated: "2026-05-02"
+updated: "2026-05-03"
 completed: "2026-05-02"
+field_validated: "2026-05-03"
 owner: pch-coder
-version: v2.6
+version: v2.7
 ---
 
 ## Introduction
@@ -27,6 +28,7 @@ Implements the 14-item remediation list from research [016-oakd-bootstrap-detect
 | v2.4 | 2026-05-02 | pch-plan-reviewer | Review Q4 resolved: cleanup separated from install; user-level test coverage explicit |
 | v2.5 | 2026-05-02 | pch-plan-reviewer | Review Q5 resolved: manual rollback runbook in Phase 5 |
 | v2.6 | 2026-05-02 | pch-plan-reviewer | Review Q6 resolved: `waveshare_hub` WARNING with explicit deviation note; complexity assessment, follow-ups, review summary added; status → Ready for Implementation |
+| v2.7 | 2026-05-03 | pch-planner | Post-field-deployment update: documented 2 bugs found during live bringup (SSH streaming deadlock, ExecStart path under sudo), both fixed in commit `a905f98`; added Post-Implementation Findings section; updated risks with materialized items |
 
 ## Review Session Log
 
@@ -236,6 +238,9 @@ Unit file content changes:
 | `tests/test_oakd_state_machine.py` | create | 5-state matrix per Q6 (targets the rewritten `oakd` check) |
 | `tests/test_db_integrity.py` | create | Quarantine + integrity-check coverage |
 | `README.md` | modify | Operator notes (linger no longer required for VSLAM; system-level units) |
+| `src/mower_rover/transport/ssh.py` | modify (field fix) | `run_streaming()` concurrent stderr drain via daemon thread (deadlock fix — pre-existing defect, not introduced by this plan) |
+| `tests/test_transport_ssh.py` | extend (field fix) | `test_run_streaming_does_not_deadlock_on_large_stderr` regression test |
+| `tests/test_service.py` | extend (field fix) | `TestSystemLevelInstallExecStartHonorsTargetHome` — 2 tests for ExecStart path under sudo |
 
 ## Dependencies
 
@@ -257,6 +262,8 @@ Unit file content changes:
 | R8 | New `usbcore_quirks` probe false-positive on a future kernel where quirks are merged differently | Low | Spurious WARN | Probe regex matches both PIDs explicitly; future kernel changes would already break the camera, so the warning is desired. |
 | R9 | Stale rtabmap.db quarantine fills disk over many runs | Very Low | Disk pressure | Filename includes ISO8601 timestamp; operator runbook notes periodic cleanup. Files are typically <100 MB each on this rig. |
 | R10 | Migration from user-level units leaves `~/.config/systemd/user/default.target.wants/` symlinks dangling | Low | Cosmetic in `systemctl --user list-units` | `systemctl --user disable` removes the WantedBy symlink before the unit file is deleted. |
+| R11 | **MATERIALIZED:** ExecStart binary path resolves from caller's (root) environment under sudo, not from `target_home` | Certain | Service fails to start (status 203/EXEC) | Derive binary path from `target_home` when provided; use forward-slash string join for cross-platform correctness. Fixed in commit `a905f98`. |
+| R12 | **MATERIALIZED:** SSH streaming deadlock when remote build produces >64 KiB stderr | Certain | Bringup hangs indefinitely at build steps | Drain stderr concurrently on a daemon thread. Fixed in commit `a905f98`. Pre-existing defect, not introduced by this plan. |
 
 ## Execution Plan
 
@@ -378,10 +385,12 @@ Unit file content changes:
 ### Plan Completion
 
 **All phases completed:** 2026-05-02
-**Total tasks completed:** 27 (7 + 8 + 4 + 5 + 3)
-**Total files modified/created:** 14 (8 source + 4 test + README + repo memory)
-**Test count:** 599 → 659 passed (+60), 15 skipped
+**Field deployment validated:** 2026-05-03
+**Total tasks completed:** 27 (7 + 8 + 4 + 5 + 3) + 2 field-deployment fixes
+**Total files modified/created:** 16 (10 source + 4 test + README + repo memory)
+**Test count:** 599 → 662 passed (+63), 15 skipped
 **Post-implementation code review:** clean (0 findings)
+**Commits:** `0e34d1e` (plan 014 implementation), `a905f98` (field-deployment fixes)
 
 ## Standards
 
@@ -437,6 +446,75 @@ Medium complexity reflects the multi-file blast radius of the service-tier migra
 
 This plan has been reviewed and is **Ready for Implementation**.
 
+## Post-Implementation Findings
+
+Two bugs were discovered during live field deployment (2026-05-03) of the plan 014 implementation to the Jetson at 192.168.4.38. Both were fixed in commit `a905f98` with regression tests.
+
+### Finding 1: SSH `run_streaming` stderr pipe-buffer deadlock
+
+**Discovered at:** Bringup step 10 (`build-slam-node`) — process hung indefinitely after SLAM node compile completed.
+
+**Root cause:** `JetsonClient.run_streaming()` in `src/mower_rover/transport/ssh.py` read `proc.stdout` line-by-line to EOF, then called `proc.stderr.read()` only *after* `proc.wait()` returned. When cmake/make compiling `rtabmap_slam_node.cpp` wrote more than ~64 KiB to stderr (cmake config output, compiler warnings), the OS pipe buffer filled, the remote process blocked on its next stderr write, no further stdout arrived, and the pipeline deadlocked indefinitely.
+
+**Symptoms:** `cc1plus` at 98% CPU for ~42s then completed → `mower` process at 0% CPU, SSH at 0% CPU → no process activity on either side → log frozen at `ssh_streaming_start` with no `ssh_streaming_done`.
+
+**Fix:** Added `import threading` and a daemon thread (`ssh-stderr-drain`) that reads stderr in 4 KiB chunks concurrently with the stdout line-by-line loop. Both the normal and timeout paths join the thread before returning.
+
+**Why not caught earlier:** Previous bringup runs skipped `build-rtabmap`, `build-depthai`, and `build-slam-node` (binaries already cached). This was the first run that hit a full CXX compile through the streaming path.
+
+**Regression test:** `test_run_streaming_does_not_deadlock_on_large_stderr` — launches a real subprocess that writes 256 KiB to stderr + a stdout marker; asserts both streams round-trip within 5 s. Without the fix, the test deadlocks.
+
+**Scope note:** This bug was **not in any plan 014 code**. It was a pre-existing latent defect in `transport/ssh.py` exposed by the first non-cached build path.
+
+---
+
+### Finding 2: ExecStart path resolves to `/root/.local/bin/` under sudo
+
+**Discovered at:** Bringup step 17 (`service`) — `mower-health.service` failed to start with `status=203/EXEC` ("Failed to locate executable /root/.local/bin/mower-jetson: No such file or directory").
+
+**Root cause:** `install_service()` and `install_vslam_bridge_service()` in `src/mower_rover/service/unit.py` resolved the `mower-jetson` binary path via `shutil.which("mower-jetson") or str(Path.home() / ".local" / "bin" / "mower-jetson")` **before** consulting `target_home`. When run via `sudo` on the Jetson, `Path.home()` returned `/root` (the effective user's home), producing `ExecStart=/root/.local/bin/mower-jetson` — which doesn't exist. The binary lives at `/home/vincent/.local/bin/mower-jetson`.
+
+**Plan gap:** Step 1.2a specified plumbing `--target-user`/`--target-home` through to install functions and asserted that `User=` and `WorkingDirectory=` render correctly. The step's acceptance criteria verified the *unit metadata* lines but did **not** explicitly require that `ExecStart=` also use the target home for binary resolution. The `shutil.which` / `Path.home()` fallback for ExecStart was an overlooked code path that short-circuited before `target_home` was applied.
+
+**Fix:** When `target_home is not None`, derive the binary path as `f"{target_home.rstrip('/')}/.local/bin/mower-jetson"` — using forward-slash string join (not `Path()`, which on Windows produces backslashes invalid in a Linux unit file). When `target_home is None`, fall back to the original `shutil.which` / `Path.home()` behaviour.
+
+**Regression tests:**
+- `test_install_service_execstart_uses_target_home_under_sudo` — simulates `shutil.which` returning `/root/.local/bin/mower-jetson` and `Path.home()` returning `/root`; asserts unit file contains `ExecStart=/home/vincent/.local/bin/mower-jetson`.
+- `test_install_vslam_bridge_execstart_uses_target_home_under_sudo` — same pattern for bridge service.
+
+---
+
+### Plan Amendments
+
+**Updated acceptance criteria for step 1.2a:** Add explicit check that `ExecStart=` path in generated unit file uses `target_home`, not `Path.home()`, when `target_home` is provided. Original criteria verified `User=` and `WorkingDirectory=` but missed `ExecStart=`.
+
+**New risk materialized:** Add R11 — "ExecStart binary path resolves from caller's environment, not target user's, under sudo elevation." Likelihood: Certain (manifested). Impact: Service fails to start (status 203/EXEC). Mitigation: Derive binary path from `target_home` when provided.
+
+**Updated file edit inventory:** Additional modifications:
+- `src/mower_rover/transport/ssh.py` — import `threading`; `run_streaming()` stderr drain thread.
+- `tests/test_transport_ssh.py` — regression test for streaming deadlock.
+
+**Updated plan completion metrics:**
+- Test count: 659 → 662 passed (+3), 15 skipped
+- Additional commit: `a905f98` (2026-05-03)
+
+### Field Deployment Results (2026-05-03)
+
+Bringup completed all 20/20 steps against the live Jetson at 192.168.4.38 after both fixes were applied. Final probe results:
+
+| Check | Status | Detail |
+|-------|--------|--------|
+| oakd | ✅ PASS | OAK-D booted (PID f63b) at USB 5000 Mbps, service active |
+| health_service | ✅ PASS | active |
+| vslam_process | ✅ PASS | mower-vslam.service is active |
+| vslam_bridge | ✅ PASS | mower-vslam-bridge.service active, socket present |
+| vslam_pose_rate | ✅ PASS | Pose output rate: 20 Hz (>= 5 Hz) |
+| vslam_confidence | ✅ PASS | Loop closure enabled |
+| vslam_socket_active | ⚠️ HW-DEP | Socket read timed out after 10s (deferred; OAK-D FW upload timing) |
+| All kernel/udev/hub checks | ✅ PASS | usbcore quirks, Waveshare hub, udev rule, autosuspend, usbfs all green |
+
+All FR-1 through FR-12 validated on live hardware.
+
 ## Handoff
 
 | Field | Value |
@@ -445,6 +523,7 @@ This plan has been reviewed and is **Ready for Implementation**.
 | Created Date | 2026-05-02 |
 | Reviewed By | pch-plan-reviewer |
 | Review Date | 2026-05-02 |
-| Status | ✅ Ready for Implementation |
-| Next Agent | pch-coder |
+| Field Validated | 2026-05-03 |
+| Status | ✅ Complete (field-validated) |
+| Fix Commit | `a905f98` |
 | Plan Location | /docs/plans/014-oakd-bootstrap-detection-fix.md |

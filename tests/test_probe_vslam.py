@@ -534,3 +534,54 @@ class TestDependencySkip:
         )
         names = {r.name: r for r in results}
         assert names["vslam_bridge"].status == Status.SKIP
+
+
+# ------------------------------------------------------------------
+# vslam_imu_orientation check
+# ------------------------------------------------------------------
+
+
+class TestVslamImuOrientation:
+    def test_pass_no_warning_in_journal(self, tmp_path: Path) -> None:
+        mock_result = subprocess.CompletedProcess(
+            [], 0, stdout="[slam] frames=100 confidence=50 resets=0\n", stderr=""
+        )
+        with patch("mower_rover.probe.checks.vslam.subprocess.run", return_value=mock_result):
+            fn = _REGISTRY["vslam_imu_orientation"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is True
+            assert "No IMU orientation warnings" in detail
+
+    def test_fail_orientation_warning_present(self, tmp_path: Path) -> None:
+        mock_result = subprocess.CompletedProcess(
+            [], 0,
+            stdout="[warn] IMU doesn't have orientation set, it will be ignored.\n",
+            stderr="",
+        )
+        with patch("mower_rover.probe.checks.vslam.subprocess.run", return_value=mock_result):
+            fn = _REGISTRY["vslam_imu_orientation"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is False
+            assert "orientation warning detected" in detail
+
+    def test_fail_journalctl_not_found(self, tmp_path: Path) -> None:
+        with patch(
+            "mower_rover.probe.checks.vslam.subprocess.run",
+            side_effect=FileNotFoundError("journalctl"),
+        ):
+            fn = _REGISTRY["vslam_imu_orientation"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is False
+            assert "Cannot read journal" in detail
+
+    def test_pass_empty_journal_output(self, tmp_path: Path) -> None:
+        mock_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with patch("mower_rover.probe.checks.vslam.subprocess.run", return_value=mock_result):
+            fn = _REGISTRY["vslam_imu_orientation"].fn
+            passed, detail = fn(tmp_path)
+            assert passed is True
+            assert "service may not have run" in detail
+
+    def test_registered_with_correct_deps(self) -> None:
+        assert "vslam_imu_orientation" in _REGISTRY
+        assert "vslam_process" in _REGISTRY["vslam_imu_orientation"].depends_on

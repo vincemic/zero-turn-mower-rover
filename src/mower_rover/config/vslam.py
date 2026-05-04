@@ -61,6 +61,7 @@ class VslamConfig:
     stereo_resolution: str = "800p"
     stereo_fps: int = 30
     imu_rate_hz: int = 200
+    imu_rotation_sensor: str = "game_rotation_vector"
     pose_output_rate_hz: int = 20
     memory_threshold_mb: int = 6000
     loop_closure: bool = True
@@ -86,6 +87,7 @@ class VslamConfig:
                 "stereo_resolution": self.stereo_resolution,
                 "stereo_fps": self.stereo_fps,
                 "imu_rate_hz": self.imu_rate_hz,
+                "imu_rotation_sensor": self.imu_rotation_sensor,
                 "pose_output_rate_hz": self.pose_output_rate_hz,
                 "memory_threshold_mb": self.memory_threshold_mb,
                 "loop_closure": self.loop_closure,
@@ -108,6 +110,7 @@ class VslamConfig:
 _VALID_ODOMETRY = {"f2m", "f2f", "fovis", "viso2", "orbslam2"}
 _VALID_RESOLUTIONS = {"400p", "480p", "720p", "800p"}
 _VALID_USB_SPEEDS = {"HIGH", "SUPER", "SUPER_PLUS"}
+_VALID_IMU_ROTATION_SENSORS = {"game_rotation_vector", "rotation_vector", "arvr_stabilized_game_rotation_vector"}
 
 
 def _coerce_extrinsics(raw: Any) -> Extrinsics:
@@ -191,6 +194,12 @@ def _coerce(raw: dict[str, Any]) -> VslamConfig:
     if not isinstance(imu_rate_hz, int) or imu_rate_hz <= 0:
         raise VslamConfigError(f"imu_rate_hz must be a positive integer, got {imu_rate_hz!r}")
 
+    imu_rotation_sensor = vslam_raw.get("imu_rotation_sensor", "game_rotation_vector")
+    if imu_rotation_sensor not in _VALID_IMU_ROTATION_SENSORS:
+        raise VslamConfigError(
+            f"imu_rotation_sensor must be one of {_VALID_IMU_ROTATION_SENSORS}, got {imu_rotation_sensor!r}"
+        )
+
     pose_output_rate_hz = vslam_raw.get("pose_output_rate_hz", 20)
     if not isinstance(pose_output_rate_hz, int) or pose_output_rate_hz <= 0:
         raise VslamConfigError(
@@ -254,6 +263,7 @@ def _coerce(raw: dict[str, Any]) -> VslamConfig:
         stereo_resolution=stereo_resolution,
         stereo_fps=stereo_fps,
         imu_rate_hz=imu_rate_hz,
+        imu_rotation_sensor=imu_rotation_sensor,
         pose_output_rate_hz=pose_output_rate_hz,
         memory_threshold_mb=memory_threshold_mb,
         loop_closure=loop_closure,

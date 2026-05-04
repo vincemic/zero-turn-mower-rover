@@ -246,6 +246,46 @@ def test_slam_mode_round_trip(tmp_path: Path) -> None:
     assert reloaded.slam_mode == "localization"
 
 
+# ------------------------------------------------------------------
+# imu_rotation_sensor field
+# ------------------------------------------------------------------
+
+
+def test_imu_rotation_sensor_default(tmp_path: Path) -> None:
+    cfg = load_vslam_config(tmp_path / "nonexistent.yaml")
+    assert cfg.imu_rotation_sensor == "game_rotation_vector"
+
+
+def test_imu_rotation_sensor_valid_values(tmp_path: Path) -> None:
+    for val in ("game_rotation_vector", "rotation_vector", "arvr_stabilized_game_rotation_vector"):
+        data = {"vslam": {"imu_rotation_sensor": val}}
+        cfg_path = tmp_path / "vslam.yaml"
+        cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        cfg = load_vslam_config(cfg_path)
+        assert cfg.imu_rotation_sensor == val
+
+
+def test_imu_rotation_sensor_invalid(tmp_path: Path) -> None:
+    data = {"vslam": {"imu_rotation_sensor": "magnetometer"}}
+    cfg_path = tmp_path / "bad.yaml"
+    cfg_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(VslamConfigError, match="imu_rotation_sensor"):
+        load_vslam_config(cfg_path)
+
+
+def test_imu_rotation_sensor_in_to_dict() -> None:
+    cfg = VslamConfig(imu_rotation_sensor="rotation_vector")
+    d = cfg.to_dict()
+    assert d["vslam"]["imu_rotation_sensor"] == "rotation_vector"
+
+
+def test_imu_rotation_sensor_round_trip(tmp_path: Path) -> None:
+    cfg = VslamConfig(imu_rotation_sensor="rotation_vector")
+    out = save_vslam_config(cfg, tmp_path / "round.yaml")
+    reloaded = load_vslam_config(out)
+    assert reloaded.imu_rotation_sensor == "rotation_vector"
+
+
 def test_ir_negative_rejected(tmp_path: Path) -> None:
     data = {"vslam": {"ir_dot_projector_ma": -1}}
     cfg_path = tmp_path / "bad.yaml"

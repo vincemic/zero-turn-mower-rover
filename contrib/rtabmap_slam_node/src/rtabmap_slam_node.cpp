@@ -99,6 +99,9 @@ struct SlamConfig {
 
     /* Zone management. */
     std::string slam_mode = "mapping";  /* "mapping" or "localization" */
+
+    /* IMU rotation sensor (BNO086). */
+    std::string imu_rotation_sensor = "game_rotation_vector";
 };
 
 static SlamConfig load_config(const std::string &path) {
@@ -149,6 +152,8 @@ static SlamConfig load_config(const std::string &path) {
             cfg.ir_flood_led_ma = vslam["ir_flood_led_ma"].as<int>();
         if (vslam["slam_mode"])
             cfg.slam_mode = vslam["slam_mode"].as<std::string>();
+        if (vslam["imu_rotation_sensor"])
+            cfg.imu_rotation_sensor = vslam["imu_rotation_sensor"].as<std::string>();
 
         std::cerr << "[config] Loaded from " << path << std::endl;
     } catch (const YAML::Exception &e) {
@@ -173,6 +178,20 @@ resolve_mono_resolution(const std::string &res) {
         return {1280, 800};
     /* Default: 400p. */
     return {640, 400};
+}
+
+/* --------------------------------------------------------------------------
+ * IMU rotation sensor mapping
+ * -------------------------------------------------------------------------- */
+
+static dai::IMUSensor parse_imu_rotation_sensor(const std::string &name) {
+    if (name == "game_rotation_vector") return dai::IMUSensor::GAME_ROTATION_VECTOR;
+    if (name == "rotation_vector") return dai::IMUSensor::ROTATION_VECTOR;
+    if (name == "arvr_stabilized_game_rotation_vector")
+        return dai::IMUSensor::ARVR_STABILIZED_GAME_ROTATION_VECTOR;
+    std::cerr << "[config] Unknown imu_rotation_sensor '" << name
+              << "'; defaulting to GAME_ROTATION_VECTOR" << std::endl;
+    return dai::IMUSensor::GAME_ROTATION_VECTOR;
 }
 
 /* --------------------------------------------------------------------------
@@ -250,6 +269,8 @@ static DaiPipeline create_depthai_pipeline(const SlamConfig &cfg) {
         dai::IMUSensor::ACCELEROMETER_RAW, cfg.imu_rate_hz);
     imu->enableIMUSensor(
         dai::IMUSensor::GYROSCOPE_RAW, cfg.imu_rate_hz);
+    imu->enableIMUSensor(
+        parse_imu_rotation_sensor(cfg.imu_rotation_sensor), cfg.imu_rate_hz);
     imu->setBatchReportThreshold(1);
     imu->setMaxBatchReports(10);
     result.imu_queue = imu->out.createOutputQueue(50, false);
@@ -655,10 +676,13 @@ static void run_slam_loop(
 
         frame_count++;
 
-        /* Drain IMU data (consume but we pass the latest accel/gyro to
-         * SensorData for RTAB-Map's IMU integration). */
+        /* Drain IMU data (consume but we pass the latest accel/gyro/orientation
+         * to SensorData for RTAB-Map's IMU integration). */
         cv::Vec3f accel(0, 0, 0);
         cv::Vec3f gyro(0, 0, 0);
+        /* Zero quaternion = no orientation data yet; RTAB-Map will discard
+         * IMU until first valid rotation packet arrives (graceful startup). */
+        cv::Vec4d orientation(0, 0, 0, 0);  /* qx, qy, qz, qw */
         {
             auto imu_data = dai.imu_queue->tryGetAll<dai::IMUData>();
             for (auto &pkt : imu_data) {
@@ -669,6 +693,13 @@ static void run_slam_loop(
                     gyro[0] = p.gyroscope.x;
                     gyro[1] = p.gyroscope.y;
                     gyro[2] = p.gyroscope.z;
+                    if (p.rotationVector.real != 0 || p.rotationVector.i != 0 ||
+                        p.rotationVector.j != 0 || p.rotationVector.k != 0) {
+                        orientation[0] = p.rotationVector.i;
+                        orientation[1] = p.rotationVector.j;
+                        orientation[2] = p.rotationVector.k;
+                        orientation[3] = p.rotationVector.real;
+                    }
                 }
             }
         }
@@ -686,6 +717,7 @@ static void run_slam_loop(
         if (accel[0] != 0 || accel[1] != 0 || accel[2] != 0) {
             rtabmap::Transform imu_local_transform = rtabmap::Transform::getIdentity();
             sensor_data.setIMU(rtabmap::IMU(
+                orientation, cv::Mat::eye(3, 3, CV_64FC1),
                 gyro, cv::Mat::eye(3, 3, CV_64FC1),
                 accel, cv::Mat::eye(3, 3, CV_64FC1),
                 imu_local_transform));

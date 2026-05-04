@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import contextlib
 import importlib.resources
+import os
 import re
-import time
+import tempfile
 from typing import TYPE_CHECKING
 
 from mower_rover.logging_setup.setup import get_logger
@@ -43,8 +44,8 @@ def _extract_version(content: bytes) -> str | None:
 class _FTPSession:
     """Thin wrapper around pymavlink's MAVLink FTP operations.
 
-    Encapsulates the callback-driven FTP API into simple blocking helpers
-    that are easy to mock in tests.
+    Encapsulates the synchronous pymavlink 2.4.49 MAVFTP API into simple
+    blocking helpers that are easy to mock in tests.
     """
 
     def __init__(self, conn: object) -> None:
@@ -56,100 +57,47 @@ class _FTPSession:
             target_system=conn.target_system,  # type: ignore[attr-defined]
             target_component=conn.target_component,  # type: ignore[attr-defined]
         )
-        self._result: bytes | None = None
-        self._error: str | None = None
-        self._listing: list[str] | None = None
-        self._done = False
+        self._tmpdir = tempfile.mkdtemp()
 
     # -- blocking helpers --------------------------------------------------
 
     def list_directory(self, path: str) -> list[str]:
         """Return filenames in *path* on the remote SD card."""
-        self._done = False
-        self._listing = None
-        self._error = None
-        self._ftp.cmd_list([path], callback=self._list_cb)
-        self._pump()
-        if self._error:
-            raise OSError(self._error)
-        return self._listing or []
+        from pymavlink.mavftp import FtpError
+
+        ret = self._ftp.cmd_list([path])
+        if ret.error_code != FtpError.Success:
+            raise OSError(f"list {path}: FTP error {ret.error_code}")
+        return [entry.name for entry in self._ftp.list_result]
 
     def read_file(self, path: str) -> bytes:
         """Download a remote file and return its contents."""
-        self._done = False
-        self._result = None
-        self._error = None
-        self._ftp.cmd_get([path], callback=self._read_cb)
-        self._pump()
-        if self._error:
-            raise OSError(self._error)
-        return self._result or b""
+        self._ftp.filename = os.path.join(self._tmpdir, "mavftp_dl")
+        data = self._ftp.read(path, 0x40000)
+        if data is None:
+            raise OSError(f"read {path}: FTP transfer failed")
+        return data
 
     def write_file(self, path: str, data: bytes) -> None:
         """Upload *data* to *path* on the remote SD card."""
-        self._done = False
-        self._error = None
-        self._ftp.cmd_put([path], data, callback=self._write_cb)
-        self._pump()
-        if self._error:
-            raise OSError(self._error)
+        from io import BytesIO
+
+        from pymavlink.mavftp import FtpError
+
+        ret = self._ftp.cmd_put([path, path], fh=BytesIO(data))
+        if ret.error_code != FtpError.Success:
+            raise OSError(f"write {path}: FTP create error {ret.error_code}")
+        ret = self._ftp.process_ftp_reply("CreateFile", timeout=30)
+        if ret.error_code != FtpError.Success:
+            raise OSError(f"write {path}: FTP transfer error {ret.error_code}")
 
     def mkdir(self, path: str) -> None:
         """Create a directory on the remote SD card (idempotent)."""
-        self._done = False
-        self._error = None
-        self._ftp.cmd_mkdir([path], callback=self._generic_cb)
-        self._pump()
-        # Ignore "already exists" errors
-        if self._error and "exist" not in self._error.lower():
-            raise OSError(self._error)
+        from pymavlink.mavftp import FtpError
 
-    # -- internal callbacks ------------------------------------------------
-
-    def _list_cb(self, entry: object) -> None:
-        if isinstance(entry, str):
-            if entry.startswith("ERR:") or entry.startswith("Timeout"):
-                self._error = entry
-                self._done = True
-            else:
-                if self._listing is None:
-                    self._listing = []
-                # Entries may have trailing info (size, etc.); take just the name
-                name = entry.split("\t")[0].strip()
-                if name:
-                    self._listing.append(name)
-        elif entry is None:
-            self._done = True
-
-    def _read_cb(self, data: object) -> None:
-        if isinstance(data, bytes):
-            self._result = data
-            self._done = True
-        elif isinstance(data, str):
-            self._error = data
-            self._done = True
-        elif data is None:
-            self._done = True
-
-    def _write_cb(self, result: object) -> None:
-        if isinstance(result, str) and ("ERR" in result or "Timeout" in result):
-            self._error = result
-        self._done = True
-
-    def _generic_cb(self, result: object) -> None:
-        if isinstance(result, str) and ("ERR" in result or "Timeout" in result):
-            self._error = result
-        self._done = True
-
-    def _pump(self, timeout_s: float = 10.0) -> None:
-        """Pump the MAVLink connection until the FTP operation completes."""
-        deadline = time.monotonic() + timeout_s
-        while not self._done and time.monotonic() < deadline:
-            self._conn.recv_match(type="FILE_TRANSFER_PROTOCOL", timeout=0.1)  # type: ignore[attr-defined]
-            self._ftp.idle_task()
-        if not self._done:
-            self._error = "FTP operation timed out"
-            self._done = True
+        ret = self._ftp.cmd_mkdir([path])
+        if ret.error_code not in (FtpError.Success, FtpError.FileExists):
+            raise OSError(f"mkdir {path}: FTP error {ret.error_code}")
 
 
 def check_and_deploy_lua(conn: object) -> None:
@@ -214,6 +162,19 @@ def check_and_deploy_lua(conn: object) -> None:
 
         # Upload bundled script
         ftp.write_file(_REMOTE_PATH, bundled)
+
+        # Verify upload integrity via read-back
+        try:
+            readback = ftp.read_file(_REMOTE_PATH)
+            if readback != bundled:
+                log.warning(
+                    "lua_deploy_verify_mismatch",
+                    expected_len=len(bundled),
+                    got_len=len(readback),
+                )
+        except OSError as exc:
+            log.warning("lua_deploy_verify_failed", error=str(exc))
+
         log.warning(
             "lua_deploy_uploaded",
             version=bundled_ver,

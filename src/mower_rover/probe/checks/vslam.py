@@ -217,3 +217,26 @@ def check_vslam_confidence(sysroot: Path) -> tuple[bool, str]:
     if loop_closure:
         return True, "Loop closure enabled (supports Medium/High confidence)"
     return False, "Loop closure disabled — mapping confidence will be Low"
+
+
+# ------------------------------------------------------------------
+# IMU orientation health check
+# ------------------------------------------------------------------
+
+
+@register("vslam_imu_orientation", severity=Severity.WARNING, depends_on=("vslam_process",))
+def check_vslam_imu_orientation(sysroot: Path) -> tuple[bool, str]:
+    """Scan recent RTAB-Map journal for IMU orientation warnings."""
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", _VSLAM_SERVICE, "--since", "5 min ago",
+             "--no-pager", "-o", "cat"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False, "Cannot read journal for mower-vslam.service"
+    if "doesn't have orientation set" in result.stdout:
+        return False, "RTAB-Map IMU orientation warning detected — IMU data being discarded"
+    if result.stdout.strip():
+        return True, "No IMU orientation warnings in last 5 min"
+    return True, "No recent VSLAM journal output (service may not have run)"
