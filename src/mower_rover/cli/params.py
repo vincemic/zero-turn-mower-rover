@@ -16,7 +16,7 @@ from rich.console import Console
 
 from mower_rover.logging_setup.setup import get_logger
 from mower_rover.mavlink.connection import ConnectionConfig, open_link
-from mower_rover.params.baseline import BASELINE_PATH, load_baseline
+from mower_rover.params.baseline import BASELINE_PATH, PROFILES, load_baseline, load_profile
 from mower_rover.params.diff import diff_params, render_diff
 from mower_rover.params.io import (
     ParamSet,
@@ -60,7 +60,7 @@ def snapshot_command(
 def diff_command(
     left: Path = typer.Argument(
         ...,
-        help="Left side: JSON snapshot, YAML, or .parm file. Use 'baseline' for the shipped baseline.",  # noqa: E501
+        help="Left side: JSON snapshot, YAML, or .parm file. Use a profile name (e.g. 'baseline', 'safety-defaults') for a shipped profile.",  # noqa: E501
     ),
     right: Path = typer.Argument(
         ...,
@@ -68,7 +68,7 @@ def diff_command(
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
-    """Diff two param sets. Argument 'baseline' resolves to the shipped Z254 baseline."""
+    """Diff two param sets. Profile names ('baseline', 'safety-defaults', ...) resolve to shipped profiles."""  # noqa: E501
     left_set = _load_any(left)
     right_set = _load_any(right)
     diff = diff_params(left_set, right_set)
@@ -81,9 +81,14 @@ def diff_command(
 @app.command("apply")
 def apply_command(
     ctx: typer.Context,
-    params_file: Path = typer.Argument(
-        ...,
-        help="YAML/JSON/.parm file of params to apply. Use 'baseline' for the shipped baseline.",
+    params_file: Path | None = typer.Argument(
+        None,
+        help="YAML/JSON/.parm file of params to apply. Use 'baseline' for the shipped baseline. Mutually exclusive with --profile.",  # noqa: E501
+    ),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help=f"Named profile to apply. Known: {', '.join(sorted(PROFILES))}. Mutually exclusive with PARAMS_FILE.",  # noqa: E501
     ),
     endpoint: str = typer.Option(
         "udp:127.0.0.1:14550", "--port", "--endpoint", help="MAVLink endpoint."
@@ -99,8 +104,23 @@ def apply_command(
     ),
 ) -> None:
     """Apply a param file. Snapshots first, shows the diff, requires confirmation."""
-    log = get_logger("cli.params").bind(op="apply", source=str(params_file))
-    desired = _load_any(params_file)
+    if (params_file is None) == (profile is None):
+        raise typer.BadParameter(
+            "exactly one of PARAMS_FILE or --profile must be supplied"
+        )
+    if profile is not None:
+        if profile not in PROFILES:
+            known = ", ".join(sorted(PROFILES))
+            raise typer.BadParameter(
+                f"unknown profile {profile!r}; known: {known}"
+            )
+        desired = load_profile(profile)
+        source_label = f"profile:{profile}"
+    else:
+        assert params_file is not None  # for mypy; guarded above
+        desired = _load_any(params_file)
+        source_label = str(params_file)
+    log = get_logger("cli.params").bind(op="apply", source=source_label)
     console = Console()
 
     obj = ctx.obj or {}
@@ -128,7 +148,7 @@ def apply_command(
             (n, before[n]) for n in desired if n in before
         )
         diff = diff_params(before_subset, desired)
-        render_diff(diff, console, label_old="autopilot", label_new=str(params_file))
+        render_diff(diff, console, label_old="autopilot", label_new=source_label)
 
         if diff.is_empty:
             console.print("[bold green]Autopilot already matches; nothing to apply.[/bold green]")
@@ -138,7 +158,7 @@ def apply_command(
             _confirm_apply(
                 ctx=safety,
                 changes=len(diff.changed) + len(diff.added),
-                source=str(params_file),
+                source=source_label,
             )
         except ConfirmationAborted:
             console.print("[bold red]Aborted; no params written.[/bold red]")
@@ -162,8 +182,12 @@ def _confirm_apply(*, ctx: SafetyContext, changes: int, source: str) -> None:
 
 
 def _load_any(path: Path) -> ParamSet:
-    """Load a `ParamSet` from YAML, JSON snapshot, or .parm — or 'baseline'."""
+    """Load a `ParamSet` from YAML, JSON snapshot, or .parm — or a named profile."""
     s = str(path)
+    # Profile magic-strings (e.g. 'baseline', 'safety-defaults') resolve before
+    # filesystem lookup so packaged profiles are addressable without a path.
+    if s in PROFILES:
+        return load_profile(s)
     if s.lower() == "baseline":
         return load_baseline()
     p = Path(s)

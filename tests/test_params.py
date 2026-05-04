@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from mower_rover.params.baseline import BASELINE_PATH, load_baseline
+from mower_rover.params.baseline import (
+    BASELINE_PATH,
+    PROFILES,
+    SAFETY_DEFAULTS_PATH,
+    load_baseline,
+    load_profile,
+)
 from mower_rover.params.diff import diff_params
 from mower_rover.params.io import (
     ParamSet,
@@ -102,3 +108,61 @@ def test_baseline_yaml_is_valid_yaml() -> None:
     data = yaml.safe_load(BASELINE_PATH.read_text(encoding="utf-8"))
     assert isinstance(data, dict)
     assert all(isinstance(k, str) for k in data)
+
+
+# ---------------------------------------------------------------------------
+# Profile registry (plan 016)
+# ---------------------------------------------------------------------------
+
+SAFETY_KEYS = (
+    "FENCE_ENABLE",
+    "FENCE_ACTION",
+    "FS_EKF_ACTION",
+    "FS_ACTION",
+    "FS_GCS_ENABLE",
+    "FS_GCS_TIMEOUT",
+    "ARMING_CHECK",
+)
+
+
+def test_profiles_registry_contains_baseline_and_safety_defaults() -> None:
+    assert "baseline" in PROFILES
+    assert "safety-defaults" in PROFILES
+    assert PROFILES["baseline"] == BASELINE_PATH
+    assert PROFILES["safety-defaults"] == SAFETY_DEFAULTS_PATH
+
+
+def test_load_profile_safety_defaults_has_seven_keys() -> None:
+    p = load_profile("safety-defaults")
+    assert len(p) == 7
+    assert p["FENCE_ENABLE"] == 1
+    assert p["FENCE_ACTION"] == 2
+    assert p["FS_EKF_ACTION"] == 2
+    assert p["FS_ACTION"] == 2
+    assert p["FS_GCS_ENABLE"] == 1
+    assert p["FS_GCS_TIMEOUT"] == 5
+    assert p["ARMING_CHECK"] == 13816
+
+
+def test_load_profile_baseline_matches_load_baseline() -> None:
+    assert load_profile("baseline").as_sorted_dict() == load_baseline().as_sorted_dict()
+
+
+def test_load_profile_unknown_raises_with_known_names() -> None:
+    with pytest.raises(KeyError) as exc:
+        load_profile("nonexistent")
+    msg = str(exc.value)
+    assert "nonexistent" in msg
+    assert "baseline" in msg
+    assert "safety-defaults" in msg
+
+
+def test_baseline_and_safety_defaults_agree_on_safety_keys() -> None:
+    """Plan 016 Phase 4.4: prevent drift between the two yamls."""
+    baseline = load_baseline()
+    safety = load_profile("safety-defaults")
+    for key in SAFETY_KEYS:
+        assert key in baseline, f"baseline missing {key}"
+        assert baseline[key] == safety[key], (
+            f"{key}: baseline={baseline[key]!r} safety-defaults={safety[key]!r}"
+        )

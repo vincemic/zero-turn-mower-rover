@@ -1,0 +1,30 @@
+# safety-defaults.yaml — Failsafe corrections per docs/research/019.
+#
+# Targeted, minimal-blast-radius profile. Apply to the live Pixhawk via:
+#   mower params apply --profile safety-defaults
+#
+# Each value is independently justified; do not edit without re-reading
+# docs/research/019-current-architecture-fragility.md Phase 1 and the
+# Planning Session Log of docs/plans/016-failsafe-defaults-correction.md.
+
+# --- Geofence ---------------------------------------------------------------
+FENCE_ENABLE: 1               # Geofence on; primary backstop against runaway
+FENCE_ACTION: 2               # Hold on breach (NOT RTL — RTL = straight line through obstacles)
+
+# --- EKF failsafe -----------------------------------------------------------
+FS_EKF_ACTION: 2              # Hold on EKF failure (RTL = exactly when not to trust position)
+
+# --- General failsafe action -----------------------------------------------
+FS_ACTION: 2                  # Hold for any failsafe (asserted explicitly per Q3)
+
+# --- GCS heartbeat failsafe ------------------------------------------------
+FS_GCS_ENABLE: 1              # Hold if MAVLink heartbeat lost (decision Q3)
+FS_GCS_TIMEOUT: 5             # seconds without heartbeat before action
+
+# --- Arming checks ---------------------------------------------------------
+# Bitmask 13816 = GPS(8) + INS(16) + Params(32) + RC(64) + BoardV(128)
+#                + Batt(256) + Logging(1024) + GPSConfig(4096) + System(8192)
+# Compass and Safety-switch bits omitted (hardware-incompatible).
+# VisualOdom bit omitted (VSLAM is soft-real-time per research 019 Phase 3).
+# Mission bit omitted (would block Manual-mode shakedowns).
+ARMING_CHECK: 13816

@@ -22,3 +22,43 @@ def test_laptop_version() -> None:
 def test_jetson_help() -> None:
     result = CliRunner().invoke(jetson_app, ["--help"])
     assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# `mower params apply --profile` validation (plan 016 Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def test_params_apply_requires_one_of_path_or_profile() -> None:
+    """Supplying neither must fail before any MAVLink connect."""
+    result = CliRunner().invoke(laptop_app, ["params", "apply", "--yes"])
+    assert result.exit_code != 0
+    assert "exactly one of" in result.output.lower()
+
+
+def test_params_apply_rejects_both_path_and_profile(tmp_path: object) -> None:
+    """Supplying both must fail before any MAVLink connect."""
+    result = CliRunner().invoke(
+        laptop_app,
+        ["params", "apply", "baseline", "--profile", "safety-defaults", "--yes"],
+    )
+    assert result.exit_code != 0
+    assert "exactly one of" in result.output.lower()
+
+
+def test_params_apply_rejects_unknown_profile() -> None:
+    result = CliRunner().invoke(
+        laptop_app, ["params", "apply", "--profile", "nonexistent", "--yes"]
+    )
+    assert result.exit_code != 0
+    assert "unknown profile" in result.output.lower()
+
+
+def test_params_diff_resolves_safety_defaults_magic_string() -> None:
+    """`mower params diff baseline safety-defaults` runs without files on disk."""
+    result = CliRunner().invoke(
+        laptop_app, ["params", "diff", "baseline", "safety-defaults", "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    # JSON output contains the changed-key set; just verify it parsed and ran.
+    assert "FENCE_ENABLE" in result.output or "changed" in result.output

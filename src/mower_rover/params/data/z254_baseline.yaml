@@ -127,8 +127,15 @@ FS_OPTIONS: 1                 # Failsafes active even when already in Hold mode
 RTL_SPEED: 0                  # Use WP_SPEED
 
 # --- Geofence ---------------------------------------------------------------
+FENCE_ENABLE: 1               # Geofence on (added per plan 016 / research 019 Phase 1)
 FENCE_ACTION: 2               # Hold on breach
 
 # --- Arming -----------------------------------------------------------------
+# ARMING_CHECK bitmask 13816 = GPS(8) + INS(16) + Params(32) + RC(64)
+#   + BoardV(128) + Batt(256) + Logging(1024) + GPSConfig(4096) + System(8192).
+# Compass and Safety-switch bits omitted (hardware-incompatible). VisualOdom
+# bit omitted (VSLAM is soft-real-time). Mission bit omitted (would block
+# Manual-mode shakedowns). Added per plan 016 / research 019 Phase 1.
+ARMING_CHECK: 13816
 ARMING_REQUIRE: 1
 ARMING_NEED_LOC: 1            # Require GPS fix before arming

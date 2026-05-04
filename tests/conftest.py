@@ -145,3 +145,17 @@ def sitl_endpoint() -> Iterator[str]:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+@pytest.fixture()
+def sitl_connection(sitl_endpoint: str) -> Iterator[object]:
+    """Open a pymavlink link to the SITL endpoint and yield the connection.
+
+    Function-scoped so each test gets a fresh, properly-closed link. Reuses the
+    session-scoped `sitl_endpoint` SITL process.
+    """
+    from mower_rover.mavlink.connection import ConnectionConfig, open_link
+
+    with open_link(ConnectionConfig(endpoint=sitl_endpoint, baud=57600)) as conn:
+        yield conn
+
