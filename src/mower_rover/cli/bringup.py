@@ -1612,6 +1612,10 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
             bctx.console.print(result.stderr, style="dim", highlight=False)
         raise typer.Exit(code=3)
 
+    # Ensure ~/.mavproxy dir exists (MAVProxy needs it on first run)
+    with contextlib.suppress(SshError):
+        client.run(["mkdir -p ~/.mavproxy"], timeout=10)
+
     # Verify installation
     bctx.console.print("  Verifying MAVProxy…")
     try:
@@ -1797,25 +1801,36 @@ def _run_kiosk_services(client: JetsonClient, bctx: BringupContext) -> None:
         bctx.console.print(f"  [red]Kiosk unit deploy failed:[/red] {exc}")
         raise typer.Exit(code=3) from exc
 
-    # Reload and enable + start
-    bctx.console.print("  Enabling and starting kiosk services…")
+    # Reload and enable (start is best-effort — Weston needs a display)
+    bctx.console.print("  Enabling kiosk services…")
+    try:
+        client.run(
+            [
+                f"sudo systemctl daemon-reload"
+                f" && sudo systemctl enable {WESTON_UNIT_NAME}.service {KIOSK_UNIT_NAME}.service",
+            ],
+            timeout=30,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Kiosk service enable failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+
+    bctx.console.print("  Starting kiosk services (best-effort — requires display)…")
     try:
         result = client.run(
             [
-                f"sudo systemctl daemon-reload"
-                f" && sudo systemctl enable {WESTON_UNIT_NAME}.service {KIOSK_UNIT_NAME}.service"
-                f" && sudo systemctl start {WESTON_UNIT_NAME}.service {KIOSK_UNIT_NAME}.service",
+                f"sudo systemctl start {WESTON_UNIT_NAME}.service {KIOSK_UNIT_NAME}.service",
             ],
             timeout=60,
         )
-    except SshError as exc:
-        bctx.console.print(f"  [red]Kiosk service start failed:[/red] {exc}")
-        raise typer.Exit(code=3) from exc
-    if not result.ok:
-        bctx.console.print(f"  [red]Kiosk service start exited {result.returncode}:[/red]")
-        if result.stderr:
-            bctx.console.print(result.stderr, style="dim", highlight=False)
-        raise typer.Exit(code=3)
+        if not result.ok:
+            bctx.console.print(
+                "  [yellow]Kiosk start failed (expected on headless Jetson).[/yellow]"
+            )
+    except SshError:
+        bctx.console.print(
+            "  [yellow]Kiosk start failed (expected on headless Jetson).[/yellow]"
+        )
 
     # Verify
     time.sleep(2)

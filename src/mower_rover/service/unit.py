@@ -457,7 +457,8 @@ def generate_mavproxy_unit_file(
 ) -> str:
     """Return the content of a systemd unit file for the mower-mavproxy service."""
     out_args = " ".join(f"--out={o}" for o in outputs)
-    exec_start = f"mavproxy.py --master={master} {out_args} --daemon --non-interactive"
+    mavproxy_bin = f"{home_dir}/.local/share/uv/tools/mower-rover/bin/mavproxy.py"
+    exec_start = f"{mavproxy_bin} --master={master} {out_args} --daemon --non-interactive"
     return _MAVPROXY_UNIT_TEMPLATE.format(
         exec_start=exec_start,
         user=user,
