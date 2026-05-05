@@ -91,6 +91,13 @@ app.add_typer(vslam_app, name="vslam")
 zone_app = typer.Typer(name="zone", help="Multi-zone lawn management.", no_args_is_help=True)
 app.add_typer(zone_app, name="zone")
 
+pixhawk_app = typer.Typer(
+    name="pixhawk",
+    help="Pixhawk configuration sync (params + Lua scripts).",
+    no_args_is_help=True,
+)
+app.add_typer(pixhawk_app, name="pixhawk")
+
 
 @app.callback()
 def _root(
@@ -1008,6 +1015,121 @@ def zone_status_command(
         else:
             typer.echo(f"ERROR: {error_msg}", err=True)
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# pixhawk sync — ensure Pixhawk params + Lua scripts match shipped profiles
+# ---------------------------------------------------------------------------
+
+PIXHAWK_SYNC_UNIT_NAME = "mower-pixhawk-sync"
+
+
+@pixhawk_app.command("sync")
+def pixhawk_sync_command(
+    ctx: typer.Context,
+    endpoint: str = typer.Option(
+        "/dev/pixhawk",
+        "--port",
+        "--endpoint",
+        help="MAVLink endpoint. Default: /dev/pixhawk (USB).",
+    ),
+    baud: int = typer.Option(0, help="Serial baud (0 for USB CDC)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Sync shipped param profiles and Lua scripts to the connected Pixhawk.
+
+    Idempotent — diffs the autopilot's current state against the shipped
+    safety-defaults profile and the bundled AHRS Lua script. Only writes
+    if there is a difference.  Designed to run at boot via the
+    mower-pixhawk-sync.service oneshot unit.
+    """
+    from mower_rover.pixhawk.sync import sync_pixhawk
+
+    log = get_logger("cli-jetson").bind(op="pixhawk_sync")
+    obj = ctx.obj or {}
+    dry_run = bool(obj.get("dry_run"))
+
+    config = ConnectionConfig(endpoint=endpoint, baud=baud)
+    try:
+        with open_link(config) as conn:
+            result = sync_pixhawk(conn, dry_run=dry_run)
+    except Exception as exc:
+        log.error("pixhawk_sync_connect_failed", error=str(exc))
+        if json_out:
+            typer.echo(_json.dumps({"ok": False, "error": str(exc)}, indent=2))
+        else:
+            typer.echo(f"ERROR: could not connect to Pixhawk: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if json_out:
+        typer.echo(
+            _json.dumps(
+                {
+                    "ok": result.ok,
+                    "params_checked": result.params_checked,
+                    "params_applied": result.params_applied,
+                    "params_already_current": result.params_already_current,
+                    "lua_deployed": result.lua_deployed,
+                    "profiles_applied": result.profiles_applied,
+                    "errors": result.errors,
+                    "dry_run": dry_run,
+                },
+                indent=2,
+            )
+        )
+    else:
+        if result.params_already_current:
+            typer.echo("Params: already in sync.")
+        elif result.params_applied:
+            typer.echo(f"Params: applied {result.params_applied} changes.")
+        if result.lua_deployed:
+            typer.echo("Lua: sync complete.")
+        if result.errors:
+            for e in result.errors:
+                typer.echo(f"ERROR: {e}", err=True)
+
+    if not result.ok:
+        raise typer.Exit(code=1)
+
+
+@pixhawk_app.command("sync-install")
+def pixhawk_sync_install_command(
+    ctx: typer.Context,
+    user_level: bool = typer.Option(True, "--user/--system", help="User-level or system-level."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+    target_user: str | None = typer.Option(
+        None, "--target-user", help="User for the unit's User= line (default: current user)."
+    ),
+    target_home: str | None = typer.Option(
+        None, "--target-home",
+        help="Home dir for WorkingDirectory= (default: current home).",
+    ),
+) -> None:
+    """Install a systemd oneshot service that syncs on boot."""
+    from mower_rover.pixhawk.unit import install_pixhawk_sync_service
+
+    obj = ctx.obj or {}
+    safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
+    install_pixhawk_sync_service(
+        safety,
+        user_level=user_level,
+        target_user=target_user,
+        target_home=target_home,
+    )
+
+
+@pixhawk_app.command("sync-uninstall")
+def pixhawk_sync_uninstall_command(
+    ctx: typer.Context,
+    user_level: bool = typer.Option(True, "--user/--system", help="User-level or system-level."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Remove the pixhawk-sync systemd service."""
+    from mower_rover.pixhawk.unit import uninstall_pixhawk_sync_service
+
+    obj = ctx.obj or {}
+    safety = SafetyContext(dry_run=bool(obj.get("dry_run")), assume_yes=yes)
+    uninstall_pixhawk_sync_service(safety, user_level=user_level)
 
 
 if __name__ == "__main__":

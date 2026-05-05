@@ -67,6 +67,7 @@ STEP_NAMES = (
     "service",
     "vslam-db-check",
     "vslam-services",
+    "pixhawk-sync",
     "final-verify",
 )
 
@@ -1475,6 +1476,78 @@ def _run_vslam_services(client: JetsonClient, bctx: BringupContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step: pixhawk-sync
+# ---------------------------------------------------------------------------
+
+
+def _pixhawk_sync_done(client: JetsonClient) -> bool:
+    """Check: pixhawk-sync service is enabled (installed)."""
+    try:
+        r = client.run(
+            ["systemctl", "is-enabled", "mower-pixhawk-sync.service"],
+            timeout=10,
+        )
+        return r.ok
+    except SshError:
+        return False
+
+
+def _run_pixhawk_sync(client: JetsonClient, bctx: BringupContext) -> None:
+    if not _confirm_or_skip(
+        "Install pixhawk-sync service and run initial sync?", bctx,
+    ):
+        bctx.console.print("  Skipped by operator.")
+        return
+
+    user = client.endpoint.user
+    home = f"/home/{user}"
+
+    bctx.console.print("  Installing mower-pixhawk-sync oneshot service…")
+    try:
+        result = client.run(
+            [
+                f"sudo ~/.local/bin/mower-jetson pixhawk sync-install --yes"
+                f" --target-user {user} --target-home {home}",
+            ],
+            timeout=60,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Sync service install failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(
+            f"  [red]Sync service install exited {result.returncode}:[/red]"
+        )
+        if result.stderr:
+            bctx.console.print(result.stderr, style="dim", highlight=False)
+        raise typer.Exit(code=3)
+
+    bctx.console.print("  Running initial Pixhawk sync…")
+    try:
+        result = client.run(
+            ["~/.local/bin/mower-jetson", "pixhawk", "sync", "--json"],
+            timeout=120,
+        )
+    except SshError as exc:
+        # Sync failure at bringup is non-fatal — Pixhawk may not be connected.
+        bctx.console.print(
+            f"  [yellow]Pixhawk sync failed (device may not be connected):[/yellow] {exc}"
+        )
+        return
+    if result.ok:
+        bctx.console.print("  [green]Pixhawk sync complete.[/green]")
+        if result.stdout.strip():
+            bctx.console.print(result.stdout.strip(), style="dim", highlight=False)
+    else:
+        bctx.console.print(
+            f"  [yellow]Pixhawk sync exited {result.returncode} "
+            "(device may not be connected).[/yellow]"
+        )
+        if result.stderr:
+            bctx.console.print(result.stderr[:500], style="dim", highlight=False)
+
+
+# ---------------------------------------------------------------------------
 # Step: final-verify
 # ---------------------------------------------------------------------------
 
@@ -1708,6 +1781,13 @@ BRINGUP_STEPS: list[BringupStep] = [
         description="VSLAM + bridge systemd services",
         check=lambda c: _vslam_services_active(c),
         execute=lambda c, b: _run_vslam_services(c, b),
+        needs_confirm=True,
+    ),
+    BringupStep(
+        name="pixhawk-sync",
+        description="Pixhawk param + Lua sync service",
+        check=lambda c: _pixhawk_sync_done(c),
+        execute=lambda c, b: _run_pixhawk_sync(c, b),
         needs_confirm=True,
     ),
     BringupStep(

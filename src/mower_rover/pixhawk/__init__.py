@@ -1,0 +1,1 @@
+"""Pixhawk configuration sync package."""
