@@ -18,6 +18,9 @@ This is **not** the autopilot firmware, **not** the physical build, and **not** 
 | Steering | 2× ASMC-04A Robot Servo (12–24 V, back-driveable) |
 | Companion computer | NVIDIA Jetson AGX Orin 64 GB (JetPack 6, 50 W mode) |
 | Depth camera | Luxonis OAK-D Pro (USB, DepthAI v3) |
+| Wheel encoders | 2× CALT GHW38 (200 PPR quadrature, push-pull) |
+| USB hub | Waveshare 4-Ch USB 3.2 Gen1 HUB (VIA Labs VL817, powered, metal case) |
+| Encoder level-shifting | NOYITO 4-Ch Optocoupler Isolator (5 V → 3.3 V) |
 | Operator control | FrSky Taranis X9D Plus (OpenTX) transmitter (SBUS/FPort) + physical E-stop |
 
 See [docs/vision/001-zero-turn-mower-rover.md](docs/vision/001-zero-turn-mower-rover.md) and [docs/research/001-mvp-bringup-rtk-mowing.md](docs/research/001-mvp-bringup-rtk-mowing.md) for full details.
@@ -216,6 +219,87 @@ The Taranis X9D Plus is the operator's handheld transmitter, providing manual ov
 - Failsafe: `FS_THR_ENABLE=1`, `FS_THR_VALUE=910` — if signal lost, rover holds position
 - The physical E-stop has absolute authority over both RC and GCS commands
 - Taranis config is version-controlled in `config/taranis/` (EdgeTX YAML export)
+
+---
+
+### CALT GHW38 Wheel Encoder
+
+<img src="docs/images/calt-ghw38-encoder.jpg" alt="CALT GHW38 Wheel Encoder" width="220" align="right"/>
+
+The CALT GHW38 is a spring-loaded rotary encoder with a rubber contact wheel, used as a wheel encoder to provide ground-truth speed and distance feedback to the Cube Orange's EKF — complementing RTK position and visual odometry.
+
+**Key features:**
+
+- 200 PPR quadrature output (A/B channels, 800 counts/rev in 4× decode)
+- Push-pull (totem pole) output driver
+- 38 mm rubber contact wheel for slip-resistant surface measurement
+- Spring-loaded pivot arm maintains constant wheel-to-surface pressure
+- Steel mounting bracket with adjustable pivot
+- Operating voltage: 5–24 V DC
+- IP54-rated encoder body
+
+**How it's used in this project:**
+
+- Two encoders (one per side) measure left and right wheel ground speed independently
+- Connected to Cube Orange AUX pins via ArduPilot `WENC` (wheel encoder) driver
+- **Level-shifting is mandatory** — Cube Orange AUX pins are 3.3 V only; the GHW38 push-pull output at 5/12 V requires opto-isolation or level shifter to avoid damage
+- Provides skid-steer odometry that detects wheel slip (RTK + encoders disagree = slip)
+- Feeds the EKF as a velocity source for dead-reckoning during brief RTK dropouts (under trees, near structures)
+- Per-side calibration accounts for tire diameter differences and encoder mounting geometry
+
+---
+
+### Waveshare 4-Ch USB 3.2 Gen1 HUB
+
+<img src="docs/images/waveshare-usb-hub.jpg" alt="Waveshare 4-Ch USB 3.2 Gen1 HUB" width="220" align="right"/>
+
+The Waveshare USB 3.2 Gen1 HUB is an industrial-grade powered USB hub that connects the OAK-D Pro and Pixhawk Cube Orange to the Jetson AGX Orin over a single upstream USB 3.x link. Its external power input ensures stable 5 V supply to high-draw USB devices.
+
+**Key features:**
+
+- 4× USB 3.2 Gen1 (5 Gbps) downstream ports
+- VIA Labs VL817 hub controller (USB-IF certified)
+- External DC 5 V power input — does not draw bus power from host
+- Metal enclosure with wall-mount brackets for vibration resistance
+- Per-port over-current protection
+- LED indicators per port for connection status
+- Driver-free, plug-and-play on Linux / Windows / macOS
+
+**How it's used in this project:**
+
+- Upstream port connects to the Jetson AGX Orin via USB 3.x
+- Downstream port 1: Luxonis OAK-D Pro (stereo camera + IMU, requires sustained 5 Gbps bandwidth)
+- Downstream port 2: Pixhawk Cube Orange (MAVLink serial over USB)
+- External 5 V supply ensures the OAK-D Pro's MyriadX boot sequence and IR projector operate without USB power budget issues
+- Mounted inside the rover's electronics enclosure with wall-mount brackets to resist mowing vibration
+- USB device IDs confirmed: OAK-D bootloader `03e7:2485` → booted `03e7:f63b`; Cube Orange `2DAE:1016`
+
+---
+
+### NOYITO 4-Channel Optocoupler Isolator
+
+<img src="docs/images/noyito-optocoupler-isolator.jpg" alt="NOYITO 4-Channel Optocoupler Isolator" width="220" align="right"/>
+
+The NOYITO 4-channel optocoupler module provides galvanic isolation and level-shifting between the wheel encoders' 5 V push-pull outputs and the Cube Orange's 3.3 V AUX inputs — protecting the flight controller from overvoltage damage.
+
+**Key features:**
+
+- 4 independent optocoupler channels (photoelectric isolation)
+- Input: PNP or NPN signals, 3.3–24 V
+- Output: NPN open-collector, pulled to 3.3 V on output side
+- Galvanic isolation between input and output sides
+- Screw terminal blocks for secure field wiring
+- Compact PCB with mounting holes
+- Response speed suitable for quadrature encoder signals at mowing speeds
+
+**How it's used in this project:**
+
+- Channels 1–2: Left encoder A/B quadrature signals (5 V → 3.3 V)
+- Channels 3–4: Right encoder A/B quadrature signals (5 V → 3.3 V)
+- Input side powered from encoder 5 V supply; output side powered from Cube Orange 3.3 V rail
+- Provides mandatory level-shifting — Cube Orange AUX pins are **not** 5 V tolerant
+- Galvanic isolation protects the flight controller from ground loops and transients induced by the mower's electrical system
+- Screw terminals allow secure connections that withstand mowing vibration without the fragility of DuPont jumpers
 
 ---
 
@@ -514,6 +598,49 @@ pytest -m sitl                             # requires sim_vehicle.py on PATH (Li
 | `@pytest.mark.jetson` | Requires a real Jetson device |
 
 SITL is a **smoke-test harness** for MAVLink plumbing, param round-trips, mode transitions, and dry-run paths. It is **not** a tuning tool — the kinematic model has no mass, friction, or hydrostatics.
+
+## Development with GitHub Copilot Custom Agents
+
+This project was developed entirely through a structured AI-assisted workflow using **GitHub Copilot** with a suite of custom agents (the "PCH" agent chain). Each agent specializes in one phase of the software engineering lifecycle, enforcing separation of concerns and producing auditable documentation at every step.
+
+### The agent workflow
+
+```
+Idea → pch-visionary → pch-researcher → pch-planner → pch-plan-reviewer → pch-coder → Explore
+```
+
+| Agent | Role | Output |
+|---|---|---|
+| **pch-visionary** | Transforms raw ideas into structured vision documents through guided Q&A, combining business analyst and solution architect perspectives | Vision doc with goals, stakeholders, requirements (FRs/NFRs), constraints, stages, and non-goals |
+| **pch-researcher** | Creates phased research outlines, then delegates phase execution to subagents for deep technical investigation | Research doc with findings, parameter values, library evaluations, hardware confirmations, and open questions |
+| **pch-planner** | Creates highly detailed implementation plans with decision logs, execution phases, and file-level specifications | Versioned plan doc (v1.0 → v2.0+) with decision session log, holistic review, and numbered execution steps |
+| **pch-plan-reviewer** | Reviews implementation plans for correctness, clarity, and specificity before implementation begins | Review session log with questions, decisions, and plan patches (bumps version, e.g. v2.1, v2.2) |
+| **pch-coder** | Executes implementation plan steps with precise, production-ready code following established patterns | Working code, tests, and config committed against plan phases |
+| **pch-helper** | Guides users on how to effectively use the PCH agent workflow and provides advice on agent selection and sequencing | Workflow guidance and troubleshooting |
+| **Explore** | Fast read-only codebase exploration and Q&A subagent for searching and understanding existing code | Targeted answers about code structure, patterns, and references |
+
+### How it works in practice
+
+1. **Vision (once):** The [vision document](docs/vision/001-zero-turn-mower-rover.md) was created by `pch-visionary` through an interactive Q&A session, capturing the project's goals, constraints, hardware stack, and success metrics. It serves as the authoritative "what and why" contract.
+
+2. **Research (per feature area):** Before any code is written, `pch-researcher` investigates the open technical questions. The [21 research documents](docs/research/) cover topics from RTK base station configuration to VSLAM integration to multi-zone lawn management. Each research doc cites specific hardware specs, library APIs, ArduPilot parameters, and confirms or supersedes assumptions from the vision.
+
+3. **Planning (per implementation):** `pch-planner` produces a detailed plan with numbered decision points (answered interactively), a holistic review of decision interactions, and a phased execution plan with file paths, function signatures, and test strategies. Plans reference their source research doc and vision requirements explicitly. The [18 plan documents](docs/plans/) range from parameter management to CI fixes to firmware updates.
+
+4. **Review (mandatory gate):** `pch-plan-reviewer` audits each plan for correctness — catching issues like wrong enum values, missing exports, incorrect file paths, or underspecified edge cases. The reviewer's fixes are recorded in a "Review Session Log" table and bump the plan version (e.g., v2.0 → v2.1 → v2.2). No plan proceeds to implementation without passing review.
+
+5. **Implementation:** `pch-coder` executes the reviewed plan phase by phase, following the file paths, signatures, and patterns specified in the plan. The coder does not freelance — deviations from the plan are flagged, not silently introduced.
+
+### What this approach produces
+
+- **Full traceability:** Every line of code traces back through plan → research → vision requirements
+- **Auditable decisions:** Decision logs capture *why* each technical choice was made (e.g., "Unix socket IPC, not shared memory, because..." or "source build RTAB-Map, not apt package, because...")
+- **Catch-before-code:** The review gate catches bugs at the design level — wrong parameter names, missing edge cases, incorrect assumptions — before any code is written
+- **Living documentation:** The docs aren't afterthoughts; they're the primary artifacts that drive implementation. The 21 research docs and 18 plans constitute the project's engineering record
+
+### The copilot-instructions contract
+
+The [.github/copilot-instructions.md](.github/copilot-instructions.md) file provides all agents with shared context: the hardware stack, tooling choices, naming conventions, safety constraints, and explicit "things to avoid." This ensures every agent — whether researching, planning, or coding — operates with the same ground truth about the physical system.
 
 ## License
 
