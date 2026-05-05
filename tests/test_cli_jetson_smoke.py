@@ -488,11 +488,19 @@ def test_jetson_zone_activate_service_restart_failure(runner: CliRunner) -> None
 
 
 def test_jetson_zone_status_with_active_zone(runner: CliRunner) -> None:
-    """Test zone status command - will fail due to missing config but command should exist."""
+    """Test zone status --json command exists and produces recognizable output."""
     result = runner.invoke(jetson_app, ["zone", "status", "--json"])
-    # Should fail due to missing vslam config, but command should be recognized
-    assert result.exit_code != 0
+    # Command should be recognized (not "no such command")
     assert "no such command" not in result.output.lower()
+    # On Linux with systemctl, the command may succeed (exit 0 with defaults);
+    # on Windows it fails because systemctl is absent.  Either is acceptable.
+    if result.exit_code == 0:
+        import json as _json
+
+        data = _json.loads(result.output)
+        assert "status" in data or "zone_id" in data
+    else:
+        assert result.exit_code == 1
 
 
 def test_jetson_zone_status_no_active_zone(runner: CliRunner) -> None:
