@@ -21,6 +21,9 @@ _log = get_logger("service.unit")
 UNIT_NAME = "mower-health"
 VSLAM_UNIT_NAME = "mower-vslam"
 VSLAM_BRIDGE_UNIT_NAME = "mower-vslam-bridge"
+WESTON_UNIT_NAME = "mower-weston"
+KIOSK_UNIT_NAME = "mower-kiosk"
+MAVPROXY_UNIT_NAME = "mower-mavproxy"
 
 # ---------------------------------------------------------------------------
 # Generic unit templates
@@ -34,7 +37,7 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 {binds_to}
 [Service]
-Type=notify
+Type={service_type}
 ExecStart={exec_start}
 Environment=MOWER_CORRELATION_ID=daemon
 User={user}
@@ -55,7 +58,7 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 {binds_to}
 [Service]
-Type=notify
+Type={service_type}
 ExecStart={exec_start}
 Environment=MOWER_CORRELATION_ID=daemon
 WorkingDirectory={home_dir}
@@ -80,6 +83,7 @@ def generate_service_unit(
     watchdog_sec: int = 30,
     timeout_start_sec: int | None = None,
     runtime_directory: str | None = None,
+    service_type: str = "notify",
 ) -> str:
     """Return a systemd unit file from the generic template.
 
@@ -103,6 +107,7 @@ def generate_service_unit(
         watchdog_sec=watchdog_sec,
         timeout_start_sec=timeout_line,
         runtime_directory=runtime_dir_line,
+        service_type=service_type,
     )
 
 
@@ -378,6 +383,98 @@ def generate_vslam_bridge_unit_file(
         binds_to="dev-pixhawk.device",
         watchdog_sec=30,
         runtime_directory="mower",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Kiosk-related unit templates
+# ---------------------------------------------------------------------------
+
+_WESTON_UNIT_TEMPLATE = """\
+[Unit]
+Description=Weston kiosk compositor for mower display
+After=multi-user.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/weston --shell=kiosk-shell.so --idle-time=0 --log=/var/log/mower-jetson/weston.log --continue-without-input
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+User={user}
+WorkingDirectory={home_dir}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+_MAVPROXY_UNIT_TEMPLATE = """\
+[Unit]
+Description=MAVProxy telemetry forwarder for mower
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart={exec_start}
+Environment=MOWER_CORRELATION_ID=daemon
+User={user}
+WorkingDirectory={home_dir}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def generate_weston_unit_file(
+    *,
+    user: str = "vincent",
+    home_dir: str = "/home/vincent",
+) -> str:
+    """Return the content of a systemd unit file for the mower-weston service."""
+    return _WESTON_UNIT_TEMPLATE.format(user=user, home_dir=home_dir)
+
+
+def generate_mavproxy_unit_file(
+    *,
+    master: str,
+    outputs: list[str],
+    user: str = "vincent",
+    home_dir: str = "/home/vincent",
+) -> str:
+    """Return the content of a systemd unit file for the mower-mavproxy service."""
+    out_args = " ".join(f"--out={o}" for o in outputs)
+    exec_start = f"mavproxy.py --master={master} {out_args} --daemon --non-interactive"
+    return _MAVPROXY_UNIT_TEMPLATE.format(
+        exec_start=exec_start,
+        user=user,
+        home_dir=home_dir,
+    )
+
+
+def generate_kiosk_unit_file(
+    *,
+    mower_jetson_path: str,
+    user: str = "vincent",
+    home_dir: str = "/home/vincent",
+) -> str:
+    """Return the content of a systemd unit file for the mower-kiosk service."""
+    exec_start = f"{mower_jetson_path} kiosk run"
+    return generate_service_unit(
+        description="Mower Rover kiosk operational display",
+        exec_start=exec_start,
+        user=user,
+        home_dir=home_dir,
+        user_level=False,
+        after=f"{WESTON_UNIT_NAME}.service mower-health.service",
+        binds_to=f"{WESTON_UNIT_NAME}.service",
+        watchdog_sec=30,
+        service_type="notify",
     )
 
 

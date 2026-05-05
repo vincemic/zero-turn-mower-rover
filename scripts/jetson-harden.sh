@@ -522,6 +522,133 @@ harden_slam_node() {
 }
 
 # ---------------------------------------------------------------------------
+# 16. DRM modeset + console blanking — kiosk display prerequisites
+# ---------------------------------------------------------------------------
+harden_drm_modeset() {
+    local extlinux="/boot/extlinux/extlinux.conf"
+
+    if [[ ! -f "$extlinux" ]]; then
+        STATUS[drm_modeset]="skip:no_extlinux"
+        return
+    fi
+
+    local need_modeset=false
+    local need_consoleblank=false
+
+    if ! grep -q 'nvidia_drm\.modeset=1' "$extlinux"; then
+        need_modeset=true
+    fi
+    if ! grep -q 'consoleblank=0' "$extlinux"; then
+        need_consoleblank=true
+    fi
+
+    if ! $need_modeset && ! $need_consoleblank; then
+        STATUS[drm_modeset]="already"
+        return
+    fi
+
+    cp "$extlinux" "${extlinux}.bak.drm"
+    echo "  extlinux backup saved to ${extlinux}.bak.drm"
+
+    if $need_modeset; then
+        sed -i '/^\s*APPEND / s/$/ nvidia_drm.modeset=1/' "$extlinux"
+    fi
+    if $need_consoleblank; then
+        sed -i '/^\s*APPEND / s/$/ consoleblank=0/' "$extlinux"
+    fi
+
+    echo "  extlinux diff:"
+    diff "${extlinux}.bak.drm" "$extlinux" || true
+    STATUS[drm_modeset]="applied"
+}
+
+# ---------------------------------------------------------------------------
+# 17. Kiosk user groups — video,render for Weston DRM/GPU access
+# ---------------------------------------------------------------------------
+harden_kiosk_groups() {
+    local user="${SUDO_USER:-$(logname 2>/dev/null || echo vincent)}"
+    local current_groups
+    current_groups="$(groups "$user" 2>/dev/null || echo "")"
+
+    local need_video=false
+    local need_render=false
+
+    if ! echo "$current_groups" | grep -qw 'video'; then
+        need_video=true
+    fi
+    if ! echo "$current_groups" | grep -qw 'render'; then
+        need_render=true
+    fi
+
+    if ! $need_video && ! $need_render; then
+        STATUS[kiosk_groups]="already"
+        return
+    fi
+
+    usermod -aG video,render "$user"
+    STATUS[kiosk_groups]="applied"
+}
+
+# ---------------------------------------------------------------------------
+# 18. Weston config — kiosk-shell compositor configuration
+# ---------------------------------------------------------------------------
+harden_weston_config() {
+    # Install nvidia-l4t-weston if not present
+    if ! dpkg -s nvidia-l4t-weston &>/dev/null; then
+        apt-get update -qq
+        apt-get install -y nvidia-l4t-weston
+    fi
+
+    local conf_dir="/etc/xdg/weston"
+    local conf_file="$conf_dir/weston.ini"
+    local desired
+    desired=$(cat <<'WESTONINI'
+[core]
+shell=kiosk-shell.so
+idle-time=0
+
+[output]
+name=HDMI-A-1
+mode=preferred
+
+[shell]
+background-color=0xFF000000
+WESTONINI
+)
+
+    mkdir -p "$conf_dir"
+    if [[ -f "$conf_file" ]] && echo "$desired" | diff -q - "$conf_file" &>/dev/null; then
+        STATUS[weston_config]="already"
+    else
+        echo "$desired" > "$conf_file"
+        STATUS[weston_config]="applied"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 19. logind kiosk — suppress VT allocation and idle actions
+# ---------------------------------------------------------------------------
+harden_logind_kiosk() {
+    local conf_dir="/etc/systemd/logind.conf.d"
+    local conf_file="$conf_dir/kiosk.conf"
+    local desired
+    desired=$(cat <<'LOGIND'
+[Login]
+NAutoVTs=0
+IdleAction=ignore
+LOGIND
+)
+
+    mkdir -p "$conf_dir"
+    if [[ -f "$conf_file" ]] && echo "$desired" | diff -q - "$conf_file" &>/dev/null; then
+        STATUS[logind_kiosk]="already"
+    else
+        echo "$desired" > "$conf_file"
+        STATUS[logind_kiosk]="applied"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 print_summary() {
@@ -544,6 +671,10 @@ print_summary() {
         "oakd_udev:OAK-D udev rules (80-oakd-usb.rules)"
         "usb_params:USB kernel params (autosuspend, usbfs_memory_mb)"
         "jetson_clocks:jetson_clocks service (lock clocks at boot)"
+        "drm_modeset:DRM modeset + console blanking (kiosk display)"
+        "kiosk_groups:Kiosk user groups (video,render)"
+        "weston_config:Weston kiosk-shell config"
+        "logind_kiosk:logind kiosk (NAutoVTs=0, IdleAction=ignore)"
         "rtabmap:RTAB-Map 0.21.6-rolling (source build, CUDA+OpenCV)"
         "depthai_core:depthai-core v3.5.0 C++ SDK (source build)"
         "slam_node:RTAB-Map SLAM node binary (custom C++)"
@@ -576,9 +707,9 @@ main() {
         os_only=true
     fi
 
-    local total=15
+    local total=19
     if $os_only; then
-        total=12
+        total=16
     fi
 
     echo "jetson-harden.sh — Idempotent field-hardening for Jetson AGX Orin (${total} steps)"
@@ -589,8 +720,8 @@ main() {
         exit 1
     fi
 
-    echo "[1/${total}] Headless mode... SKIPPED (keeping GUI for post-flash debugging)"
-    # harden_headless  # Temporarily skipped — re-enable for field deployment
+    echo "[1/${total}] Headless mode..."
+    harden_headless
 
     echo "[2/${total}] Disabling unnecessary services..."
     harden_services
@@ -625,14 +756,26 @@ main() {
     echo "[12/${total}] jetson_clocks service..."
     harden_jetson_clocks
 
+    echo "[13/${total}] DRM modeset + console blanking..."
+    harden_drm_modeset
+
+    echo "[14/${total}] Kiosk user groups (video,render)..."
+    harden_kiosk_groups
+
+    echo "[15/${total}] Weston kiosk-shell config..."
+    harden_weston_config
+
+    echo "[16/${total}] logind kiosk config..."
+    harden_logind_kiosk
+
     if ! $os_only; then
-        echo "[13/${total}] RTAB-Map (source build)..."
+        echo "[17/${total}] RTAB-Map (source build)..."
         harden_rtabmap
 
-        echo "[14/${total}] depthai-core C++ SDK (source build)..."
+        echo "[18/${total}] depthai-core C++ SDK (source build)..."
         harden_depthai_core
 
-        echo "[15/${total}] RTAB-Map SLAM node binary..."
+        echo "[19/${total}] RTAB-Map SLAM node binary..."
         harden_slam_node
     fi
 

@@ -98,6 +98,10 @@ pixhawk_app = typer.Typer(
 )
 app.add_typer(pixhawk_app, name="pixhawk")
 
+from mower_rover.cli.kiosk import kiosk_app  # noqa: E402
+
+app.add_typer(kiosk_app, name="kiosk")
+
 
 @app.callback()
 def _root(

@@ -1176,13 +1176,16 @@ class TestStepOrdering:
             "vslam-db-check",
             "vslam-services",
             "pixhawk-sync",
+            "install-mavproxy",
+            "kiosk-services",
+            "kiosk-probe",
             "final-verify",
         )
 
-    def test_all_20_steps_present(self) -> None:
+    def test_all_24_steps_present(self) -> None:
         from mower_rover.cli.bringup import BRINGUP_STEPS
 
-        assert len(BRINGUP_STEPS) == 21
+        assert len(BRINGUP_STEPS) == 24
         names = tuple(s.name for s in BRINGUP_STEPS)
         assert names == STEP_NAMES
 
@@ -1387,7 +1390,7 @@ class TestBringupIntegrationAllSkip:
             )
         assert result.exit_code == 0, result.output
         assert "Bringup complete" in result.output
-        assert result.output.count("Already satisfied") == 20
+        assert result.output.count("Already satisfied") == 22
 
 
 class TestBringupIntegrationFromStep:

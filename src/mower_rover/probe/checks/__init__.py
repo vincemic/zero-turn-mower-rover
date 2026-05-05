@@ -6,6 +6,7 @@ from mower_rover.probe.checks import (  # noqa: F401
     cuda,
     disk,
     jetpack,
+    kiosk,
     oakd,
     power_mode,
     python_ver,

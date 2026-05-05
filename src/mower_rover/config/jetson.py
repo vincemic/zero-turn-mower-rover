@@ -29,6 +29,34 @@ def _default_jetson_config_path() -> Path:
 DEFAULT_JETSON_CONFIG_PATH: Path = _default_jetson_config_path()
 
 
+def _default_kiosk_service_units() -> list[str]:
+    return [
+        "mower-health.service",
+        "mower-vslam.service",
+        "mower-vslam-bridge.service",
+        "mower-weston.service",
+    ]
+
+
+def _default_mavproxy_outputs() -> list[str]:
+    return [
+        "udp:127.0.0.1:14550",
+        "udp:127.0.0.1:14551",
+    ]
+
+
+@dataclass
+class KioskConfig:
+    """Configuration for the kiosk operational display."""
+
+    mavproxy_endpoint: str = "udp:127.0.0.1:14551"
+    mavproxy_master: str = "/dev/ttyACM0"
+    mavproxy_outputs: list[str] = field(default_factory=_default_mavproxy_outputs)
+    vslam_socket: str = "/run/mower/vslam-pose.sock"
+    refresh_hz: int = 1
+    service_check_units: list[str] = field(default_factory=_default_kiosk_service_units)
+
+
 @dataclass
 class JetsonConfig:
     """Jetson-side runtime config.
@@ -44,6 +72,7 @@ class JetsonConfig:
     oakd_required: bool = False
     health_interval_s: int = 60
     service_user_level: bool = False
+    kiosk: KioskConfig = field(default_factory=KioskConfig)
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,10 +85,50 @@ class JetsonConfigError(ValueError):
     """Raised when a Jetson YAML config is malformed."""
 
 
+def _coerce_kiosk(raw: Any) -> KioskConfig:
+    """Parse and validate the optional ``kiosk:`` section."""
+    if raw is None:
+        return KioskConfig()
+    if not isinstance(raw, dict):
+        raise JetsonConfigError(f"kiosk section must be a mapping, got {type(raw).__name__}")
+    kwargs: dict[str, Any] = {}
+    if "mavproxy_endpoint" in raw:
+        v = raw["mavproxy_endpoint"]
+        if not isinstance(v, str):
+            raise JetsonConfigError(f"kiosk.mavproxy_endpoint must be str, got {type(v).__name__}")
+        kwargs["mavproxy_endpoint"] = v
+    if "mavproxy_master" in raw:
+        v = raw["mavproxy_master"]
+        if not isinstance(v, str):
+            raise JetsonConfigError(f"kiosk.mavproxy_master must be str, got {type(v).__name__}")
+        kwargs["mavproxy_master"] = v
+    if "mavproxy_outputs" in raw:
+        v = raw["mavproxy_outputs"]
+        if not isinstance(v, list) or not all(isinstance(i, str) for i in v):
+            raise JetsonConfigError("kiosk.mavproxy_outputs must be a list of strings")
+        kwargs["mavproxy_outputs"] = v
+    if "vslam_socket" in raw:
+        v = raw["vslam_socket"]
+        if not isinstance(v, str):
+            raise JetsonConfigError(f"kiosk.vslam_socket must be str, got {type(v).__name__}")
+        kwargs["vslam_socket"] = v
+    if "refresh_hz" in raw:
+        v = raw["refresh_hz"]
+        if not isinstance(v, int) or v <= 0:
+            raise JetsonConfigError(f"kiosk.refresh_hz must be a positive integer, got {v!r}")
+        kwargs["refresh_hz"] = v
+    if "service_check_units" in raw:
+        v = raw["service_check_units"]
+        if not isinstance(v, list) or not all(isinstance(i, str) for i in v):
+            raise JetsonConfigError("kiosk.service_check_units must be a list of strings")
+        kwargs["service_check_units"] = v
+    return KioskConfig(**kwargs)
+
+
 def _coerce(raw: dict[str, Any]) -> JetsonConfig:
     if not isinstance(raw, dict):
         raise JetsonConfigError(f"top-level YAML must be a mapping, got {type(raw).__name__}")
-    known = {"log_dir", "oakd_required", "health_interval_s", "service_user_level"}
+    known = {"log_dir", "oakd_required", "health_interval_s", "service_user_level", "kiosk"}
     extra = {k: v for k, v in raw.items() if k not in known}
     log_dir_raw = raw.get("log_dir")
     log_dir: Path | None
@@ -84,11 +153,13 @@ def _coerce(raw: dict[str, Any]) -> JetsonConfig:
         raise JetsonConfigError(
             f"service_user_level must be bool, got {type(service_user_level).__name__}"
         )
+    kiosk = _coerce_kiosk(raw.get("kiosk"))
     return JetsonConfig(
         log_dir=log_dir,
         oakd_required=oakd_required,
         health_interval_s=health_interval_s,
         service_user_level=service_user_level,
+        kiosk=kiosk,
         extra=extra,
     )
 

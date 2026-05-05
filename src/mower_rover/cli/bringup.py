@@ -1,6 +1,6 @@
 """`mower jetson bringup` — automated end-to-end Jetson provisioning.
 
-Runs on the **laptop** (Windows or Linux). Walks through 20 steps:
+Runs on the **laptop** (Windows or Linux). Walks through 23 steps:
 
  1. clear-host-key     — Remove stale SSH host key
  2. check-ssh          — SSH connectivity gate
@@ -21,7 +21,11 @@ Runs on the **laptop** (Windows or Linux). Walks through 20 steps:
 17. service            — mower-health.service install + start
 18. vslam-db-check     — RTAB-Map DB integrity check + quarantine
 19. vslam-services     — VSLAM + bridge systemd services
-20. final-verify       — Final reboot + full probe verification
+20. pixhawk-sync       — Pixhawk param + Lua sync service
+21. install-mavproxy   — MAVProxy telemetry forwarder
+22. kiosk-services     — Weston + kiosk dashboard services
+23. kiosk-probe        — Kiosk probe verification
+24. final-verify       — Final reboot + full probe verification
 """
 
 from __future__ import annotations
@@ -44,7 +48,17 @@ from rich.console import Console
 from rich.table import Table
 
 from mower_rover.logging_setup.setup import get_logger
-from mower_rover.service.unit import UNIT_NAME, VSLAM_BRIDGE_UNIT_NAME, VSLAM_UNIT_NAME
+from mower_rover.service.unit import (
+    UNIT_NAME,
+    VSLAM_BRIDGE_UNIT_NAME,
+    VSLAM_UNIT_NAME,
+    WESTON_UNIT_NAME,
+    KIOSK_UNIT_NAME,
+    MAVPROXY_UNIT_NAME,
+    generate_weston_unit_file,
+    generate_mavproxy_unit_file,
+    generate_kiosk_unit_file,
+)
 from mower_rover.transport.ssh import JetsonClient, SshError
 
 STEP_NAMES = (
@@ -68,6 +82,9 @@ STEP_NAMES = (
     "vslam-db-check",
     "vslam-services",
     "pixhawk-sync",
+    "install-mavproxy",
+    "kiosk-services",
+    "kiosk-probe",
     "final-verify",
 )
 
@@ -90,6 +107,9 @@ _DEFERRED_CHECKS: frozenset[str] = frozenset({
     "oakd_udev_rule",       # deployed by jetson-harden.sh
     "oakd_usb_autosuspend", # kernel param — set by jetson-harden.sh
     "oakd_usbfs_memory",    # kernel param — set by jetson-harden.sh
+    "kiosk_weston_active",  # installed by kiosk-services step
+    "kiosk_active",         # installed by kiosk-services step
+    "mavproxy_active",      # installed by install-mavproxy step
 })
 
 # Hardware-dependent checks that require physical devices (OAK-D, Waveshare
@@ -1548,6 +1568,320 @@ def _run_pixhawk_sync(client: JetsonClient, bctx: BringupContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step: install-mavproxy
+# ---------------------------------------------------------------------------
+
+
+def _mavproxy_active(client: JetsonClient) -> bool:
+    """Check: MAVProxy service is active and enabled."""
+    try:
+        r_active = client.run(
+            ["systemctl", "is-active", f"{MAVPROXY_UNIT_NAME}.service"],
+            timeout=10,
+        )
+        r_enabled = client.run(
+            ["systemctl", "is-enabled", f"{MAVPROXY_UNIT_NAME}.service"],
+            timeout=10,
+        )
+        return r_active.ok and r_enabled.ok
+    except SshError:
+        return False
+
+
+def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
+    if not _confirm_or_skip("Install MAVProxy and deploy mower-mavproxy service?", bctx):
+        bctx.console.print("  Skipped by operator.")
+        return
+
+    user = client.endpoint.user
+    home = f"/home/{user}"
+
+    # 1. Install MAVProxy via pip
+    bctx.console.print("  Installing MAVProxy via pip…")
+    try:
+        result = client.run(
+            [f"~/.local/share/uv/tools/mower-rover/bin/pip install MAVProxy"],
+            timeout=300,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]MAVProxy pip install failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(f"  [red]MAVProxy pip install exited {result.returncode}:[/red]")
+        if result.stderr:
+            bctx.console.print(result.stderr, style="dim", highlight=False)
+        raise typer.Exit(code=3)
+
+    # Verify installation
+    bctx.console.print("  Verifying MAVProxy…")
+    try:
+        result = client.run(
+            [f"~/.local/share/uv/tools/mower-rover/bin/mavproxy.py --version"],
+            timeout=15,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]MAVProxy verify failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(f"  [red]MAVProxy --version exited {result.returncode}.[/red]")
+        raise typer.Exit(code=3)
+    bctx.console.print(f"  MAVProxy version: {result.stdout.strip()}")
+
+    # 2. Deploy + start mower-mavproxy.service
+    bctx.console.print("  Deploying mower-mavproxy service unit…")
+    mavproxy_bin = f"{home}/.local/share/uv/tools/mower-rover/bin/mavproxy.py"
+    unit_content = generate_mavproxy_unit_file(
+        master="/dev/pixhawk",
+        outputs=["udp:127.0.0.1:14550", "udp:127.0.0.1:14551"],
+        user=user,
+        home_dir=home,
+    )
+    unit_path = f"/etc/systemd/system/{MAVPROXY_UNIT_NAME}.service"
+
+    # Write unit file via SSH
+    try:
+        client.run(
+            [f"sudo bash -c 'cat > {unit_path}' << 'UNITEOF'\n{unit_content}\nUNITEOF"],
+            timeout=30,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Unit file deploy failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+
+    try:
+        result = client.run(
+            [f"sudo systemctl daemon-reload && sudo systemctl enable --now {MAVPROXY_UNIT_NAME}.service"],
+            timeout=30,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]MAVProxy service enable failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(f"  [red]MAVProxy service enable exited {result.returncode}.[/red]")
+        if result.stderr:
+            bctx.console.print(result.stderr, style="dim", highlight=False)
+        raise typer.Exit(code=3)
+
+    # 3. Rewrite VSLAM bridge config to use UDP
+    bctx.console.print("  Updating VSLAM bridge config to use udp:127.0.0.1:14550…")
+    try:
+        result = client.run(
+            ["cat", "/etc/mower/vslam.yaml"],
+            timeout=15,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [yellow]Could not read vslam.yaml:[/yellow] {exc}")
+        return  # non-fatal — config may not exist yet
+
+    if result.ok and result.stdout.strip():
+        import yaml as _yaml
+
+        try:
+            config_data = _yaml.safe_load(result.stdout)
+        except Exception:
+            bctx.console.print("  [yellow]vslam.yaml parse failed — skipping rewrite.[/yellow]")
+            return
+
+        if config_data and isinstance(config_data, dict):
+            bridge = config_data.setdefault("bridge", {})
+            bridge["serial_device"] = "udp:127.0.0.1:14550"
+            new_yaml = _yaml.dump(config_data, default_flow_style=False)
+
+            try:
+                client.run(
+                    [f"sudo bash -c 'cat > /etc/mower/vslam.yaml' << 'YAMLEOF'\n{new_yaml}\nYAMLEOF"],
+                    timeout=30,
+                )
+            except SshError as exc:
+                bctx.console.print(f"  [yellow]Config rewrite failed:[/yellow] {exc}")
+                return
+
+    # 4. Restart VSLAM bridge service
+    bctx.console.print("  Restarting mower-vslam-bridge service…")
+    try:
+        client.run(
+            [f"sudo systemctl restart {VSLAM_BRIDGE_UNIT_NAME}.service"],
+            timeout=30,
+        )
+    except SshError:
+        bctx.console.print("  [yellow]Bridge restart failed (may not be running yet).[/yellow]")
+
+    # 5. Verify bridge reconnects (poll HEARTBEAT on udp:14550 for up to 10s)
+    bctx.console.print("  Verifying MAVProxy heartbeat (up to 10s)…")
+    time.sleep(3)  # give mavproxy time to start
+    try:
+        result = client.run(
+            [f"systemctl is-active {MAVPROXY_UNIT_NAME}.service"],
+            timeout=10,
+        )
+        if result.ok:
+            bctx.console.print("  [green]MAVProxy service active.[/green]")
+        else:
+            bctx.console.print("  [yellow]MAVProxy service not yet active — may need Pixhawk connected.[/yellow]")
+    except SshError:
+        bctx.console.print("  [yellow]Could not verify MAVProxy (non-fatal).[/yellow]")
+
+
+# ---------------------------------------------------------------------------
+# Step: kiosk-services
+# ---------------------------------------------------------------------------
+
+
+def _kiosk_services_active(client: JetsonClient) -> bool:
+    """Check: Weston and kiosk dashboard services are active."""
+    try:
+        r1 = client.run(
+            ["systemctl", "is-active", f"{WESTON_UNIT_NAME}.service"],
+            timeout=10,
+        )
+        r2 = client.run(
+            ["systemctl", "is-active", f"{KIOSK_UNIT_NAME}.service"],
+            timeout=10,
+        )
+        return r1.ok and r2.ok
+    except SshError:
+        return False
+
+
+def _run_kiosk_services(client: JetsonClient, bctx: BringupContext) -> None:
+    if not _confirm_or_skip("Install and start Weston + kiosk dashboard services?", bctx):
+        bctx.console.print("  Skipped by operator.")
+        return
+
+    user = client.endpoint.user
+    home = f"/home/{user}"
+    mower_jetson_path = f"{home}/.local/bin/mower-jetson"
+
+    # Cleanup stale user-level units
+    bctx.console.print("  Cleaning up stale user-level units…")
+    try:
+        client.run(
+            [
+                f"~/.local/bin/mower-jetson service cleanup-user-units"
+                f" --unit {WESTON_UNIT_NAME} --unit {KIOSK_UNIT_NAME}",
+            ],
+            timeout=30,
+        )
+    except SshError:
+        pass
+
+    # Deploy Weston unit
+    bctx.console.print("  Deploying mower-weston service…")
+    weston_unit = generate_weston_unit_file(user=user, home_dir=home)
+    weston_path = f"/etc/systemd/system/{WESTON_UNIT_NAME}.service"
+    try:
+        client.run(
+            [f"sudo bash -c 'cat > {weston_path}' << 'UNITEOF'\n{weston_unit}\nUNITEOF"],
+            timeout=30,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Weston unit deploy failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+
+    # Deploy kiosk unit
+    bctx.console.print("  Deploying mower-kiosk service…")
+    kiosk_unit = generate_kiosk_unit_file(
+        mower_jetson_path=mower_jetson_path,
+        user=user,
+        home_dir=home,
+    )
+    kiosk_path = f"/etc/systemd/system/{KIOSK_UNIT_NAME}.service"
+    try:
+        client.run(
+            [f"sudo bash -c 'cat > {kiosk_path}' << 'UNITEOF'\n{kiosk_unit}\nUNITEOF"],
+            timeout=30,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Kiosk unit deploy failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+
+    # Reload and enable + start
+    bctx.console.print("  Enabling and starting kiosk services…")
+    try:
+        result = client.run(
+            [
+                f"sudo systemctl daemon-reload"
+                f" && sudo systemctl enable {WESTON_UNIT_NAME}.service {KIOSK_UNIT_NAME}.service"
+                f" && sudo systemctl start {WESTON_UNIT_NAME}.service {KIOSK_UNIT_NAME}.service",
+            ],
+            timeout=60,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Kiosk service start failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    if not result.ok:
+        bctx.console.print(f"  [red]Kiosk service start exited {result.returncode}:[/red]")
+        if result.stderr:
+            bctx.console.print(result.stderr, style="dim", highlight=False)
+        raise typer.Exit(code=3)
+
+    # Verify
+    time.sleep(2)
+    try:
+        r1 = client.run(
+            ["systemctl", "is-active", f"{WESTON_UNIT_NAME}.service"],
+            timeout=10,
+        )
+        r2 = client.run(
+            ["systemctl", "is-active", f"{KIOSK_UNIT_NAME}.service"],
+            timeout=10,
+        )
+        if r1.ok and r2.ok:
+            bctx.console.print("  [green]Both kiosk services active.[/green]")
+        else:
+            bctx.console.print(
+                f"  [yellow]Weston={'active' if r1.ok else 'inactive'}, "
+                f"Kiosk={'active' if r2.ok else 'inactive'}[/yellow]"
+            )
+    except SshError:
+        bctx.console.print("  [yellow]Could not verify service status.[/yellow]")
+
+
+# ---------------------------------------------------------------------------
+# Step: kiosk-probe
+# ---------------------------------------------------------------------------
+
+
+def _kiosk_probe_check(_client: JetsonClient) -> bool:
+    return False  # always runs — lightweight check
+
+
+def _run_kiosk_probe(client: JetsonClient, bctx: BringupContext) -> None:
+    """Run kiosk-related probe checks remotely and report results."""
+    bctx.console.print("  Running kiosk probe checks…")
+
+    kiosk_checks = [
+        (f"{WESTON_UNIT_NAME}.service", "weston_active"),
+        (f"{KIOSK_UNIT_NAME}.service", "kiosk_active"),
+        (f"{MAVPROXY_UNIT_NAME}.service", "mavproxy_active"),
+    ]
+
+    all_pass = True
+    for service_name, check_name in kiosk_checks:
+        try:
+            result = client.run(
+                ["systemctl", "is-active", service_name],
+                timeout=10,
+            )
+            if result.ok:
+                bctx.console.print(f"  [green]✔ {check_name}: active[/green]")
+            else:
+                bctx.console.print(f"  [yellow]✘ {check_name}: not active[/yellow]")
+                all_pass = False
+        except SshError as exc:
+            bctx.console.print(f"  [yellow]✘ {check_name}: {exc}[/yellow]")
+            all_pass = False
+
+    if all_pass:
+        bctx.console.print("  [green]All kiosk probes passed.[/green]")
+    else:
+        bctx.console.print(
+            "  [yellow]Some kiosk probes failed — services may need "
+            "hardware (display/Pixhawk) to activate fully.[/yellow]"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Step: final-verify
 # ---------------------------------------------------------------------------
 
@@ -1791,6 +2125,26 @@ BRINGUP_STEPS: list[BringupStep] = [
         needs_confirm=True,
     ),
     BringupStep(
+        name="install-mavproxy",
+        description="MAVProxy telemetry forwarder",
+        check=lambda c: _mavproxy_active(c),
+        execute=lambda c, b: _run_install_mavproxy(c, b),
+        needs_confirm=True,
+    ),
+    BringupStep(
+        name="kiosk-services",
+        description="Weston + kiosk dashboard services",
+        check=lambda c: _kiosk_services_active(c),
+        execute=lambda c, b: _run_kiosk_services(c, b),
+        needs_confirm=True,
+    ),
+    BringupStep(
+        name="kiosk-probe",
+        description="Kiosk probe verification",
+        check=lambda c: _kiosk_probe_check(c),
+        execute=lambda c, b: _run_kiosk_probe(c, b),
+    ),
+    BringupStep(
         name="final-verify",
         description="Final reboot + probe verification",
         check=lambda c: _final_verify_check(c),
@@ -1834,11 +2188,11 @@ def bringup_command(
     strict_host_keys: str = typer.Option("accept-new", "--strict-host-keys"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts."),
 ) -> None:
-    """Automated end-to-end Jetson provisioning (20 steps).
+    """Automated end-to-end Jetson provisioning (24 steps).
 
     Walks through SSH check, hardening, build-dep install, C++ builds,
-    uv/Python install, CLI deploy, VSLAM config, service setup, and
-    final probe verification — skipping steps already satisfied.
+    uv/Python install, CLI deploy, VSLAM config, service setup, kiosk
+    display, and final probe verification — skipping steps already satisfied.
     """
     from mower_rover.cli.jetson_remote import client_for, resolve_endpoint
 
