@@ -110,7 +110,11 @@ class VslamConfig:
 _VALID_ODOMETRY = {"f2m", "f2f", "fovis", "viso2", "orbslam2"}
 _VALID_RESOLUTIONS = {"400p", "480p", "720p", "800p"}
 _VALID_USB_SPEEDS = {"HIGH", "SUPER", "SUPER_PLUS"}
-_VALID_IMU_ROTATION_SENSORS = {"game_rotation_vector", "rotation_vector", "arvr_stabilized_game_rotation_vector"}
+_VALID_IMU_ROTATION_SENSORS = {
+    "game_rotation_vector",
+    "rotation_vector",
+    "arvr_stabilized_game_rotation_vector",
+}
 
 
 def _coerce_extrinsics(raw: Any) -> Extrinsics:
@@ -197,7 +201,9 @@ def _coerce(raw: dict[str, Any]) -> VslamConfig:
     imu_rotation_sensor = vslam_raw.get("imu_rotation_sensor", "game_rotation_vector")
     if imu_rotation_sensor not in _VALID_IMU_ROTATION_SENSORS:
         raise VslamConfigError(
-            f"imu_rotation_sensor must be one of {_VALID_IMU_ROTATION_SENSORS}, got {imu_rotation_sensor!r}"
+            f"imu_rotation_sensor must be one of"
+            f" {_VALID_IMU_ROTATION_SENSORS},"
+            f" got {imu_rotation_sensor!r}"
         )
 
     pose_output_rate_hz = vslam_raw.get("pose_output_rate_hz", 20)

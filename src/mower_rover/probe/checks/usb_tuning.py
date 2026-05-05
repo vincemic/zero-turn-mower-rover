@@ -1,4 +1,5 @@
-"""USB tuning checks — autosuspend, usbfs memory, quirks, hub, udev rule, and thermal gate for OAK-D."""
+"""USB tuning checks — autosuspend, usbfs memory, quirks,
+hub, udev rule, and thermal gate for OAK-D."""
 
 from __future__ import annotations
 
@@ -72,7 +73,7 @@ def check_usbcore_quirks(sysroot: Path) -> tuple[bool, str]:
         return False, "Cannot read usbcore quirks parameter (missing sysfs)"
     missing = [q for q in _REQUIRED_QUIRKS if q not in content]
     if not missing:
-        return True, f"usbcore.quirks contains both OAK-D NO_LPM entries"
+        return True, "usbcore.quirks contains both OAK-D NO_LPM entries"
     return False, f"usbcore.quirks missing: {', '.join(missing)}"
 
 

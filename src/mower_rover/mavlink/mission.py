@@ -1,7 +1,7 @@
 """MAVLink mission protocol implementation.
 
 Provides upload/download/clear operations for missions, fences, and rally points
-using the MAVLink mission protocol (MISSION_COUNT → MISSION_REQUEST_INT → 
+using the MAVLink mission protocol (MISSION_COUNT → MISSION_REQUEST_INT →
 MISSION_ITEM_INT → MISSION_ACK handshake).
 """
 
@@ -25,16 +25,16 @@ class MissionDownloadError(RuntimeError):
 @dataclass(frozen=True)
 class MissionItem:
     """MAVLink MISSION_ITEM_INT representation.
-    
+
     Matches the MAVLink MISSION_ITEM_INT message field layout for missions,
     fences, and rally points.
     """
-    
+
     seq: int                    # Sequence number
     frame: int                  # Coordinate frame (MAV_FRAME_*)
     command: int                # MAV_CMD_* command ID
     param1: float = 0.0         # Command-specific parameter 1
-    param2: float = 0.0         # Command-specific parameter 2  
+    param2: float = 0.0         # Command-specific parameter 2
     param3: float = 0.0         # Command-specific parameter 3
     param4: float = 0.0         # Command-specific parameter 4
     x: int = 0                  # Latitude × 1e7 (int32)
@@ -47,35 +47,34 @@ class MissionItem:
 
 def upload_mission(conn: Any, items: list[MissionItem], mission_type: int) -> None:
     """Upload mission items using MAVLink mission protocol.
-    
+
     Protocol sequence:
     1. Send MISSION_COUNT with count and mission_type
     2. Wait for MISSION_REQUEST_INT for each seq
     3. Send MISSION_ITEM_INT for requested seq
     4. Repeat until MISSION_ACK received
     5. Check MISSION_ACK type for success (MAV_MISSION_ACCEPTED = 0)
-    
+
     Args:
         conn: MAVLink connection from pymavlink
         items: List of mission items to upload
         mission_type: 0=MISSION, 1=FENCE, 2=RALLY
-        
+
     Raises:
         MissionUploadError: If upload fails or times out
     """
     # Lazy import to keep module importable without pymavlink
-    from pymavlink import mavutil
-    
+
     log = get_logger("mavlink.mission").bind(
-        mission_type=mission_type, 
+        mission_type=mission_type,
         item_count=len(items)
     )
     log.info("Starting mission upload")
-    
+
     if not items:
         log.warning("No items to upload")
         return
-        
+
     # Step 1: Send MISSION_COUNT
     conn.mav.mission_count_send(
         conn.target_system,
@@ -84,28 +83,28 @@ def upload_mission(conn: Any, items: list[MissionItem], mission_type: int) -> No
         mission_type
     )
     log.debug("Sent MISSION_COUNT", count=len(items))
-    
+
     # Track which items we've sent
-    items_sent = set()
+    items_sent: set[int] = set()
     timeout_s = 10.0
     start_time = time.time()
-    
+
     while len(items_sent) < len(items):
         if time.time() - start_time > timeout_s:
             raise MissionUploadError(
                 f"Timeout waiting for MISSION_REQUEST_INT after {timeout_s}s"
             )
-            
+
         # Step 2: Wait for MISSION_REQUEST_INT
         msg = conn.recv_match(
-            type=['MISSION_REQUEST_INT', 'MISSION_REQUEST', 'MISSION_ACK'], 
+            type=['MISSION_REQUEST_INT', 'MISSION_REQUEST', 'MISSION_ACK'],
             blocking=False
         )
-        
+
         if msg is None:
             time.sleep(0.01)
             continue
-            
+
         if msg.get_type() == 'MISSION_ACK':
             if msg.type == 0:  # MAV_MISSION_ACCEPTED
                 log.info("Mission upload successful")
@@ -114,15 +113,15 @@ def upload_mission(conn: Any, items: list[MissionItem], mission_type: int) -> No
                 raise MissionUploadError(
                     f"Mission upload rejected with ACK type {msg.type}"
                 )
-                
+
         if msg.get_type() in ['MISSION_REQUEST_INT', 'MISSION_REQUEST']:
             seq = msg.seq
-            
+
             if seq >= len(items):
                 raise MissionUploadError(f"Requested seq {seq} >= item count {len(items)}")
-                
+
             item = items[seq]
-            
+
             # Step 3: Send MISSION_ITEM_INT for requested seq
             conn.mav.mission_item_int_send(
                 conn.target_system,
@@ -141,14 +140,14 @@ def upload_mission(conn: Any, items: list[MissionItem], mission_type: int) -> No
                 item.z,
                 item.mission_type
             )
-            
+
             items_sent.add(seq)
             log.debug("Sent MISSION_ITEM_INT", seq=seq, command=item.command)
-    
+
     # Wait for final MISSION_ACK
     ack_timeout = 5.0
     ack_start = time.time()
-    
+
     while time.time() - ack_start < ack_timeout:
         msg = conn.recv_match(type='MISSION_ACK', blocking=False)
         if msg is not None:
@@ -160,35 +159,34 @@ def upload_mission(conn: Any, items: list[MissionItem], mission_type: int) -> No
                     f"Mission upload rejected with final ACK type {msg.type}"
                 )
         time.sleep(0.01)
-        
+
     raise MissionUploadError(f"Timeout waiting for final MISSION_ACK after {ack_timeout}s")
 
 
 def download_mission(conn: Any, mission_type: int) -> list[MissionItem]:
     """Download mission items using MAVLink mission protocol.
-    
+
     Protocol sequence:
     1. Send MISSION_REQUEST_LIST with mission_type
     2. Wait for MISSION_COUNT
     3. For each item: send MISSION_REQUEST_INT, wait for MISSION_ITEM_INT
     4. Send MISSION_ACK when complete
-    
+
     Args:
         conn: MAVLink connection from pymavlink
         mission_type: 0=MISSION, 1=FENCE, 2=RALLY
-        
+
     Returns:
         List of mission items in sequence order
-        
+
     Raises:
         MissionDownloadError: If download fails or times out
     """
     # Lazy import to keep module importable without pymavlink
-    from pymavlink import mavutil
-    
+
     log = get_logger("mavlink.mission").bind(mission_type=mission_type)
     log.info("Starting mission download")
-    
+
     # Step 1: Send MISSION_REQUEST_LIST
     conn.mav.mission_request_list_send(
         conn.target_system,
@@ -196,11 +194,11 @@ def download_mission(conn: Any, mission_type: int) -> list[MissionItem]:
         mission_type
     )
     log.debug("Sent MISSION_REQUEST_LIST")
-    
+
     # Step 2: Wait for MISSION_COUNT
     timeout_s = 10.0
     start_time = time.time()
-    
+
     while time.time() - start_time < timeout_s:
         msg = conn.recv_match(type='MISSION_COUNT', blocking=False)
         if msg is not None and msg.mission_type == mission_type:
@@ -212,15 +210,15 @@ def download_mission(conn: Any, mission_type: int) -> list[MissionItem]:
         raise MissionDownloadError(
             f"Timeout waiting for MISSION_COUNT after {timeout_s}s"
         )
-    
+
     if item_count == 0:
         log.info("Mission is empty")
         return []
-    
+
     # Step 3: Request each item
     items: list[MissionItem] = [None] * item_count  # type: ignore
     items_received = set()
-    
+
     for seq in range(item_count):
         # Send MISSION_REQUEST_INT for this sequence number
         conn.mav.mission_request_int_send(
@@ -230,11 +228,11 @@ def download_mission(conn: Any, mission_type: int) -> list[MissionItem]:
             mission_type
         )
         log.debug("Sent MISSION_REQUEST_INT", seq=seq)
-        
+
         # Wait for MISSION_ITEM_INT response
         item_timeout = 5.0
         item_start = time.time()
-        
+
         while time.time() - item_start < item_timeout:
             msg = conn.recv_match(type='MISSION_ITEM_INT', blocking=False)
             if msg is not None and msg.seq == seq and msg.mission_type == mission_type:
@@ -263,7 +261,7 @@ def download_mission(conn: Any, mission_type: int) -> list[MissionItem]:
             raise MissionDownloadError(
                 f"Timeout waiting for MISSION_ITEM_INT seq {seq} after {item_timeout}s"
             )
-    
+
     # Step 4: Send MISSION_ACK to complete the transaction
     conn.mav.mission_ack_send(
         conn.target_system,
@@ -272,30 +270,29 @@ def download_mission(conn: Any, mission_type: int) -> list[MissionItem]:
         mission_type
     )
     log.debug("Sent MISSION_ACK")
-    
+
     log.info("Mission download completed successfully", item_count=len(items))
     return items
 
 
 def clear_mission(conn: Any, mission_type: int) -> None:
     """Clear all mission items of the specified type.
-    
+
     Uses MISSION_CLEAR_ALL with mission_type field.
     Verifies clearance by downloading and checking count.
-    
+
     Args:
-        conn: MAVLink connection from pymavlink  
+        conn: MAVLink connection from pymavlink
         mission_type: 0=MISSION, 1=FENCE, 2=RALLY
-        
+
     Raises:
         MissionUploadError: If clear operation fails
     """
     # Lazy import to keep module importable without pymavlink
-    from pymavlink import mavutil
-    
+
     log = get_logger("mavlink.mission").bind(mission_type=mission_type)
     log.info("Clearing mission")
-    
+
     # Send MISSION_CLEAR_ALL
     conn.mav.mission_clear_all_send(
         conn.target_system,
@@ -303,11 +300,11 @@ def clear_mission(conn: Any, mission_type: int) -> None:
         mission_type
     )
     log.debug("Sent MISSION_CLEAR_ALL")
-    
+
     # Wait for MISSION_ACK
     timeout_s = 5.0
     start_time = time.time()
-    
+
     while time.time() - start_time < timeout_s:
         msg = conn.recv_match(type='MISSION_ACK', blocking=False)
         if msg is not None and msg.mission_type == mission_type:
@@ -321,9 +318,9 @@ def clear_mission(conn: Any, mission_type: int) -> None:
         time.sleep(0.01)
     else:
         raise MissionUploadError(
-            f"Timeout waiting for MISSION_ACK after clear operation"
+            "Timeout waiting for MISSION_ACK after clear operation"
         )
-    
+
     # Verify by downloading - should be empty (or count=1 for mission home)
     try:
         items = download_mission(conn, mission_type)
@@ -342,20 +339,20 @@ def clear_mission(conn: Any, mission_type: int) -> None:
 
 
 def verify_round_trip(
-    conn: Any, 
-    expected: list[MissionItem], 
+    conn: Any,
+    expected: list[MissionItem],
     mission_type: int
 ) -> bool:
     """Download mission items and compare with expected list.
-    
+
     Compares sequence-by-sequence with tolerance for lat/lon precision.
     Logs differences via structlog.
-    
+
     Args:
         conn: MAVLink connection from pymavlink
         expected: Expected mission items
         mission_type: 0=MISSION, 1=FENCE, 2=RALLY
-        
+
     Returns:
         True if downloaded items match expected within tolerance
     """
@@ -363,13 +360,13 @@ def verify_round_trip(
         mission_type=mission_type,
         expected_count=len(expected)
     )
-    
+
     try:
         downloaded = download_mission(conn, mission_type)
     except MissionDownloadError as e:
         log.error("Round-trip verification failed: download error", error=str(e))
         return False
-    
+
     if len(downloaded) != len(expected):
         log.error(
             "Round-trip verification failed: count mismatch",
@@ -377,12 +374,12 @@ def verify_round_trip(
             downloaded_count=len(downloaded)
         )
         return False
-    
+
     # Compare each item
     tolerance = 1e-7  # For lat/lon integer encoding precision
     mismatches = []
-    
-    for i, (exp, got) in enumerate(zip(expected, downloaded)):
+
+    for i, (exp, got) in enumerate(zip(expected, downloaded, strict=False)):
         if exp.seq != got.seq:
             mismatches.append(f"seq[{i}]: expected {exp.seq}, got {got.seq}")
         if exp.frame != got.frame:
@@ -399,23 +396,29 @@ def verify_round_trip(
             mismatches.append(f"param4[{i}]: expected {exp.param4}, got {got.param4}")
         if exp.x != got.x:  # int32 should match exactly
             mismatches.append(f"x[{i}]: expected {exp.x}, got {got.x}")
-        if exp.y != got.y:  # int32 should match exactly  
+        if exp.y != got.y:  # int32 should match exactly
             mismatches.append(f"y[{i}]: expected {exp.y}, got {got.y}")
         if abs(exp.z - got.z) > tolerance:
             mismatches.append(f"z[{i}]: expected {exp.z}, got {got.z}")
         if exp.mission_type != got.mission_type:
-            mismatches.append(f"mission_type[{i}]: expected {exp.mission_type}, got {got.mission_type}")
+            mismatches.append(
+                f"mission_type[{i}]: expected"
+                f" {exp.mission_type}, got {got.mission_type}"
+            )
         if exp.autocontinue != got.autocontinue:
-            mismatches.append(f"autocontinue[{i}]: expected {exp.autocontinue}, got {got.autocontinue}")
+            mismatches.append(
+                f"autocontinue[{i}]: expected"
+                f" {exp.autocontinue}, got {got.autocontinue}"
+            )
         if exp.current != got.current:
             mismatches.append(f"current[{i}]: expected {exp.current}, got {got.current}")
-    
+
     if mismatches:
         log.error(
             "Round-trip verification failed: field mismatches",
             mismatches=mismatches[:10]  # Limit log spam
         )
         return False
-    
+
     log.info("Round-trip verification passed")
     return True

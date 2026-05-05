@@ -6,9 +6,9 @@ for upload to ArduPilot autopilot.
 
 from __future__ import annotations
 
-from mower_rover.zone.config import ZoneConfig, LatLon
-from mower_rover.mavlink.mission import MissionItem
 from mower_rover.logging_setup.setup import get_logger
+from mower_rover.mavlink.mission import MissionItem
+from mower_rover.zone.config import LatLon, ZoneConfig
 
 logger = get_logger()
 
@@ -30,18 +30,18 @@ def _latlng_to_int32(lat: float, lon: float) -> tuple[int, int]:
 
 def zone_to_mission(zone: ZoneConfig, waypoints: list[LatLon]) -> list[MissionItem]:
     """Convert zone config and waypoints to mission items.
-    
+
     Creates a mission sequence with:
     - Home position (seq 0)
     - DO_CHANGE_SPEED for mow speed
-    - DO_SET_RESUME_REPEAT_DIST 
+    - DO_SET_RESUME_REPEAT_DIST
     - DO_FENCE_ENABLE (if enabled)
     - NAV_WAYPOINT for each generated waypoint
-    
+
     Args:
         zone: Zone configuration
         waypoints: Generated waypoint list from planner
-        
+
     Returns:
         List of mission items ready for upload
     """
@@ -51,10 +51,10 @@ def zone_to_mission(zone: ZoneConfig, waypoints: list[LatLon]) -> list[MissionIt
         fence_enable=zone.commands.fence_enable
     )
     log.info("Converting zone to mission items")
-    
+
     items = []
     seq = 0
-    
+
     # Item 0: Home position
     home_x, home_y = _latlng_to_int32(zone.home.lat, zone.home.lon)
     items.append(MissionItem(
@@ -73,7 +73,7 @@ def zone_to_mission(zone: ZoneConfig, waypoints: list[LatLon]) -> list[MissionIt
         current=1  # Home is current waypoint initially
     ))
     seq += 1
-    
+
     # DO_CHANGE_SPEED: Set mowing speed
     items.append(MissionItem(
         seq=seq,
@@ -91,7 +91,7 @@ def zone_to_mission(zone: ZoneConfig, waypoints: list[LatLon]) -> list[MissionIt
         current=0
     ))
     seq += 1
-    
+
     # DO_SET_RESUME_REPEAT_DIST: Set resume distance
     items.append(MissionItem(
         seq=seq,
@@ -109,7 +109,7 @@ def zone_to_mission(zone: ZoneConfig, waypoints: list[LatLon]) -> list[MissionIt
         current=0
     ))
     seq += 1
-    
+
     # DO_FENCE_ENABLE: Enable geo-fence if configured
     if zone.commands.fence_enable:
         items.append(MissionItem(
@@ -128,7 +128,7 @@ def zone_to_mission(zone: ZoneConfig, waypoints: list[LatLon]) -> list[MissionIt
             current=0
         ))
         seq += 1
-    
+
     # NAV_WAYPOINT for each mowing waypoint
     for waypoint in waypoints:
         wp_x, wp_y = _latlng_to_int32(waypoint.lat, waypoint.lon)
@@ -148,21 +148,21 @@ def zone_to_mission(zone: ZoneConfig, waypoints: list[LatLon]) -> list[MissionIt
             current=0
         ))
         seq += 1
-    
+
     log.info("Mission conversion complete", total_items=len(items))
     return items
 
 
 def zone_to_fence(zone: ZoneConfig) -> list[MissionItem]:
     """Convert zone boundary and exclusions to fence mission items.
-    
+
     Creates fence items for:
     - Boundary vertices as FENCE_POLYGON_VERTEX_INCLUSION
     - Exclusion zone vertices as FENCE_POLYGON_VERTEX_EXCLUSION
-    
+
     Args:
         zone: Zone configuration
-        
+
     Returns:
         List of fence mission items (mission_type=1)
     """
@@ -172,18 +172,18 @@ def zone_to_fence(zone: ZoneConfig) -> list[MissionItem]:
         exclusion_zones=len(zone.exclusion_zones)
     )
     log.info("Converting zone to fence items")
-    
+
     items = []
     seq = 0
-    
+
     # Boundary inclusion fence (must be first fence item)
     vertex_count = len(zone.boundary)
     for i, vertex in enumerate(zone.boundary):
         vertex_x, vertex_y = _latlng_to_int32(vertex.lat, vertex.lon)
-        
+
         # First vertex has the total vertex count in param1
         param1 = float(vertex_count) if i == 0 else 0.0
-        
+
         items.append(MissionItem(
             seq=seq,
             frame=MAV_FRAME_GLOBAL_INT,
@@ -200,17 +200,17 @@ def zone_to_fence(zone: ZoneConfig) -> list[MissionItem]:
             current=0
         ))
         seq += 1
-    
+
     # Exclusion zone fences
     for exclusion in zone.exclusion_zones:
         exclusion_vertex_count = len(exclusion.polygon)
-        
+
         for i, vertex in enumerate(exclusion.polygon):
             vertex_x, vertex_y = _latlng_to_int32(vertex.lat, vertex.lon)
-            
+
             # First vertex of each exclusion zone has the vertex count
             param1 = float(exclusion_vertex_count) if i == 0 else 0.0
-            
+
             items.append(MissionItem(
                 seq=seq,
                 frame=MAV_FRAME_GLOBAL_INT,
@@ -227,19 +227,19 @@ def zone_to_fence(zone: ZoneConfig) -> list[MissionItem]:
                 current=0
             ))
             seq += 1
-    
+
     log.info("Fence conversion complete", total_items=len(items))
     return items
 
 
 def zone_to_rally(zone: ZoneConfig) -> list[MissionItem]:
     """Convert zone rally point to rally mission items.
-    
+
     Creates a single rally point from the zone's rally_point configuration.
-    
+
     Args:
         zone: Zone configuration
-        
+
     Returns:
         List with one rally mission item (mission_type=2)
     """
@@ -249,9 +249,9 @@ def zone_to_rally(zone: ZoneConfig) -> list[MissionItem]:
         rally_lon=zone.rally_point.lon
     )
     log.info("Converting zone to rally items")
-    
+
     rally_x, rally_y = _latlng_to_int32(zone.rally_point.lat, zone.rally_point.lon)
-    
+
     item = MissionItem(
         seq=0,
         frame=MAV_FRAME_GLOBAL_INT,
@@ -267,6 +267,6 @@ def zone_to_rally(zone: ZoneConfig) -> list[MissionItem]:
         autocontinue=1,
         current=0
     )
-    
+
     log.info("Rally conversion complete")
     return [item]

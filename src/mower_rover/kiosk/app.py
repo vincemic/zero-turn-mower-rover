@@ -137,9 +137,8 @@ def _poll_health(state: SharedState, sysroot: Path) -> None:
             if d.total_gb > 0:
                 nvme_pct = (d.used_gb / d.total_gb) * 100
             nvme_free_gb = f"{d.free_gb:.1f} GB"
-        if d.mount_point == "/":
-            if d.total_gb > 0:
-                root_pct = (d.used_gb / d.total_gb) * 100
+        if d.mount_point == "/" and d.total_gb > 0:
+            root_pct = (d.used_gb / d.total_gb) * 100
 
     # Wi-Fi
     wifi = read_wifi_status(sysroot)
@@ -219,7 +218,7 @@ def run_kiosk(
     import gi
 
     gi.require_version("Gtk", "4.0")
-    from gi.repository import GLib, Gtk
+    from gi.repository import GLib
 
     from mower_rover.kiosk.dashboard import KioskApp
 
@@ -288,7 +287,7 @@ def run_kiosk(
 
         GLib.timeout_add_seconds(15, _watchdog_tick)
 
-    app.do_activate = _activate_with_notify  # type: ignore[assignment]
+    app.do_activate = _activate_with_notify  # type: ignore[method-assign]
 
     # Run GTK main loop (blocks until app quits)
     try:

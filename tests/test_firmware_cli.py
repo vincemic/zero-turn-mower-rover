@@ -4,8 +4,9 @@ Test coverage for firmware-check, firmware-update, and firmware-flash commands
 using mocked MAVLink connections and firmware functions.
 """
 
-from unittest.mock import MagicMock, patch
 import json
+from unittest.mock import MagicMock, patch
+
 import pytest
 from typer.testing import CliRunner
 
@@ -48,12 +49,12 @@ class TestFirmwareCheckCommand:
         mock_conn = MagicMock()
         mock_open_link.return_value.__enter__.return_value = mock_conn
         mock_read_version.return_value = mock_firmware_info
-        
+
         result = cli_runner.invoke(app, [
-            "pixhawk", "firmware-check", 
+            "pixhawk", "firmware-check",
             "--json", "--offline"  # offline to skip remote check
         ])
-        
+
         assert result.exit_code == 0
         output = json.loads(result.stdout)
         assert output["ok"] is True
@@ -70,12 +71,12 @@ class TestFirmwareCheckCommand:
         mock_open_link.return_value.__enter__.return_value = mock_conn
         mock_read_version.return_value = mock_firmware_info  # 4.5.3
         mock_check_remote.return_value = (4, 5, 4)  # newer version available
-        
+
         result = cli_runner.invoke(app, [
-            "pixhawk", "firmware-check", 
+            "pixhawk", "firmware-check",
             "--json"
         ])
-        
+
         assert result.exit_code == 0
         output = json.loads(result.stdout)
         assert output["update_available"] is True
@@ -85,12 +86,12 @@ class TestFirmwareCheckCommand:
     def test_connection_failure_exits_one(self, mock_open_link, cli_runner):
         """Test connection failure exits with code 1."""
         mock_open_link.side_effect = Exception("Connection failed")
-        
+
         result = cli_runner.invoke(app, [
             "pixhawk", "firmware-check",
             "--json"
         ])
-        
+
         assert result.exit_code == 1
         output = json.loads(result.stdout)
         assert output["ok"] is False
@@ -114,7 +115,7 @@ class TestFirmwareUpdateCommand:
     @patch("mower_rover.params.mav.fetch_params")
     @patch("mower_rover.params.io.write_json_snapshot")
     def test_dry_run_skips_flash(
-        self, 
+        self,
         mock_write_snapshot,
         mock_fetch_params,
         mock_validate_apj,
@@ -122,12 +123,12 @@ class TestFirmwareUpdateCommand:
         mock_check_remote,
         mock_read_version,
         mock_open_link,
-        cli_runner, 
+        cli_runner,
         mock_firmware_info
     ):
         """Test --dry-run skips actual flash operation."""
         from pathlib import Path
-        
+
         mock_conn = MagicMock()
         mock_open_link.return_value.__enter__.return_value = mock_conn
         mock_read_version.return_value = mock_firmware_info  # 4.5.3
@@ -136,13 +137,13 @@ class TestFirmwareUpdateCommand:
         mock_validate_apj.return_value = None
         mock_fetch_params.return_value = {}
         mock_write_snapshot.return_value = None
-        
+
         result = cli_runner.invoke(app, [
             "--dry-run",
-            "pixhawk", "firmware-update", 
+            "pixhawk", "firmware-update",
             "--json"
         ])
-        
+
         # Dry run should exit successfully
         assert result.exit_code == 0
         # Should not call reboot_to_bootloader or flash_firmware in dry run
@@ -151,11 +152,11 @@ class TestFirmwareUpdateCommand:
     def test_offline_mode_error(self, cli_runner):
         """Test offline mode returns error for firmware-update."""
         result = cli_runner.invoke(app, [
-            "pixhawk", "firmware-update", 
+            "pixhawk", "firmware-update",
             "--offline", "--json"
         ])
-        
-        # Should fail with offline mode not supported  
+
+        # Should fail with offline mode not supported
         assert result.exit_code == 1
         # Check that offline error is mentioned in the output
         output_text = result.stdout + result.stderr
@@ -178,7 +179,7 @@ class TestFirmwareFlashCommand:
             "/nonexistent/firmware.apj",
             "--json"
         ])
-        
+
         assert result.exit_code == 1
         output = json.loads(result.stdout)
         assert output["ok"] is False
@@ -191,14 +192,14 @@ class TestFirmwareFlashCommand:
     @patch("mower_rover.params.io.write_json_snapshot")
     @patch("pathlib.Path.exists")
     def test_dry_run_skips_flash(
-        self, 
+        self,
         mock_exists,
         mock_write_snapshot,
         mock_fetch_params,
         mock_validate_apj,
         mock_read_version,
         mock_open_link,
-        cli_runner, 
+        cli_runner,
         mock_firmware_info
     ):
         """Test --dry-run skips actual flash operation."""
@@ -209,14 +210,14 @@ class TestFirmwareFlashCommand:
         mock_validate_apj.return_value = None
         mock_fetch_params.return_value = {}
         mock_write_snapshot.return_value = None
-        
+
         result = cli_runner.invoke(app, [
             "--dry-run",
             "pixhawk", "firmware-flash",
             "/tmp/test-firmware.apj",
             "--json"
         ])
-        
+
         # Dry run should exit successfully
         assert result.exit_code == 0
         # Should not call reboot_to_bootloader or flash_firmware in dry run
@@ -228,13 +229,13 @@ class TestFirmwareFlashCommand:
         """Test invalid .apj file exits with code 1."""
         mock_exists.return_value = True
         mock_validate_apj.side_effect = Exception("Invalid APJ format")
-        
+
         result = cli_runner.invoke(app, [
             "pixhawk", "firmware-flash",
-            "/tmp/invalid-firmware.apj", 
+            "/tmp/invalid-firmware.apj",
             "--json"
         ])
-        
+
         assert result.exit_code == 1
         output = json.loads(result.stdout)
         assert output["ok"] is False
@@ -247,7 +248,7 @@ class TestFirmwareCommandsIntegration:
     def test_all_commands_have_json_option(self, cli_runner):
         """Test all firmware commands support --json option."""
         commands = ["firmware-check", "firmware-update", "firmware-flash"]
-        
+
         for cmd in commands:
             # Test that --json is in help text
             help_result = cli_runner.invoke(app, ["pixhawk", cmd, "--help"])
@@ -257,7 +258,7 @@ class TestFirmwareCommandsIntegration:
     def test_all_commands_have_port_option(self, cli_runner):
         """Test all firmware commands support --port option."""
         commands = ["firmware-check", "firmware-update", "firmware-flash"]
-        
+
         for cmd in commands:
             help_result = cli_runner.invoke(app, ["pixhawk", cmd, "--help"])
             assert help_result.exit_code == 0
@@ -274,7 +275,7 @@ class TestSSHWrapperCommands:
         """Test SSH wrapper commands can be imported."""
         from mower_rover.cli.laptop import app as laptop_app
         from mower_rover.cli.pixhawk_laptop import app as pixhawk_app
-        
+
         # Should be able to import without errors
         assert laptop_app is not None
         assert pixhawk_app is not None
@@ -284,17 +285,17 @@ class TestSSHWrapperCommands:
     def test_firmware_check_ssh(self, mock_client_for, mock_resolve, cli_runner):
         """Test firmware-check SSH wrapper builds correct remote command."""
         from mower_rover.cli.laptop import app as laptop_app
-        
+
         mock_client = MagicMock()
         mock_client.run.return_value = MagicMock(stdout="firmware ok", stderr="", returncode=0)
         mock_client_for.return_value = mock_client
         mock_resolve.return_value = MagicMock()
-        
+
         result = cli_runner.invoke(laptop_app, [
-            "pixhawk", "firmware-check", 
+            "pixhawk", "firmware-check",
             "--host", "jetson", "--user", "me", "--json"
         ])
-        
+
         assert result.exit_code == 0
         # Verify remote command was constructed correctly
         mock_client.run.assert_called_once()
@@ -308,18 +309,18 @@ class TestSSHWrapperCommands:
     def test_firmware_update_ssh(self, mock_client_for, mock_resolve, cli_runner):
         """Test firmware-update SSH wrapper builds correct remote command."""
         from mower_rover.cli.laptop import app as laptop_app
-        
+
         mock_client = MagicMock()
         mock_client.run.return_value = MagicMock(stdout="update complete", stderr="", returncode=0)
         mock_client_for.return_value = mock_client
         mock_resolve.return_value = MagicMock()
-        
+
         result = cli_runner.invoke(laptop_app, [
-            "pixhawk", "firmware-update", 
-            "--host", "jetson", "--user", "me", 
+            "pixhawk", "firmware-update",
+            "--host", "jetson", "--user", "me",
             "--track", "beta", "--yes", "--force", "--json"
         ])
-        
+
         assert result.exit_code == 0
         # Verify remote command was constructed correctly
         mock_client.run.assert_called_once()
@@ -334,18 +335,18 @@ class TestSSHWrapperCommands:
     def test_firmware_flash_ssh(self, mock_client_for, mock_resolve, cli_runner):
         """Test firmware-flash SSH wrapper builds correct remote command."""
         from mower_rover.cli.laptop import app as laptop_app
-        
+
         mock_client = MagicMock()
         mock_client.run.return_value = MagicMock(stdout="flash complete", stderr="", returncode=0)
         mock_client_for.return_value = mock_client
         mock_resolve.return_value = MagicMock()
-        
+
         result = cli_runner.invoke(laptop_app, [
             "pixhawk", "firmware-flash", "/tmp/firmware.apj",
-            "--host", "jetson", "--user", "me", 
+            "--host", "jetson", "--user", "me",
             "--yes", "--skip-snapshot", "--json"
         ])
-        
+
         assert result.exit_code == 0
         # Verify remote command was constructed correctly
         mock_client.run.assert_called_once()
@@ -360,18 +361,18 @@ class TestSSHWrapperCommands:
     def test_dry_run_passes_through(self, mock_client_for, mock_resolve, cli_runner):
         """Test --dry-run flag passes through to remote commands."""
         from mower_rover.cli.laptop import app as laptop_app
-        
+
         mock_client = MagicMock()
         mock_client.run.return_value = MagicMock(stdout="dry run", stderr="", returncode=0)
         mock_client_for.return_value = mock_client
         mock_resolve.return_value = MagicMock()
-        
+
         result = cli_runner.invoke(laptop_app, [
             "--dry-run",
-            "pixhawk", "firmware-update", 
+            "pixhawk", "firmware-update",
             "--host", "jetson", "--user", "me", "--json"
         ])
-        
+
         assert result.exit_code == 0
         # Verify --dry-run was added to remote command
         mock_client.run.assert_called_once()
@@ -385,17 +386,17 @@ class TestSSHWrapperCommands:
         """Test SSH error handling in wrapper commands."""
         from mower_rover.cli.laptop import app as laptop_app
         from mower_rover.transport.ssh import SshError
-        
+
         mock_client = MagicMock()
         mock_client.run.side_effect = SshError("Connection failed")
         mock_client_for.return_value = mock_client
         mock_resolve.return_value = MagicMock()
-        
+
         result = cli_runner.invoke(laptop_app, [
-            "pixhawk", "firmware-check", 
+            "pixhawk", "firmware-check",
             "--host", "jetson", "--user", "me"
         ])
-        
+
         assert result.exit_code == 3
         assert "ERROR: Connection failed" in result.stderr
 
@@ -404,21 +405,21 @@ class TestSSHWrapperCommands:
     def test_output_forwarding(self, mock_client_for, mock_resolve, cli_runner):
         """Test stdout and stderr are forwarded correctly."""
         from mower_rover.cli.laptop import app as laptop_app
-        
+
         mock_client = MagicMock()
         mock_client.run.return_value = MagicMock(
-            stdout='{"ok": true, "version": "4.5.3"}\n', 
-            stderr="debug info\n", 
+            stdout='{"ok": true, "version": "4.5.3"}\n',
+            stderr="debug info\n",
             returncode=0
         )
         mock_client_for.return_value = mock_client
         mock_resolve.return_value = MagicMock()
-        
+
         result = cli_runner.invoke(laptop_app, [
-            "pixhawk", "firmware-check", 
+            "pixhawk", "firmware-check",
             "--host", "jetson", "--user", "me", "--json"
         ])
-        
+
         assert result.exit_code == 0
         # Output should be forwarded to stdout
         assert '{"ok": true, "version": "4.5.3"}' in result.stdout

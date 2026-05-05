@@ -224,7 +224,8 @@ class JetsonClient:
 
         def _drain_stderr() -> None:
             assert proc.stderr is not None
-            for chunk in iter(lambda: proc.stderr.read(4096), ""):
+            err = proc.stderr
+            for chunk in iter(lambda: err.read(4096), ""):
                 stderr_chunks.append(chunk)
 
         stderr_thread = threading.Thread(

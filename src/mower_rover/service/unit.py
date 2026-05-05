@@ -7,6 +7,7 @@ and system-level installation.
 
 from __future__ import annotations
 
+import contextlib
 import getpass
 import shutil
 import subprocess
@@ -188,10 +189,8 @@ def _cleanup_user_unit(unit_name: str) -> bool:
     service = f"{unit_name}.service"
 
     for action in ("stop", "disable"):
-        try:
+        with contextlib.suppress(subprocess.CalledProcessError, FileNotFoundError, OSError):
             _systemctl([action, service], user_level=True)
-        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-            pass
 
     user_unit_path = Path.home() / ".config" / "systemd" / "user" / service
     deleted = False
@@ -203,10 +202,8 @@ def _cleanup_user_unit(unit_name: str) -> bool:
         except OSError:
             pass
 
-    try:
+    with contextlib.suppress(subprocess.CalledProcessError, FileNotFoundError, OSError):
         _systemctl(["daemon-reload"], user_level=True)
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-        pass
 
     return deleted
 
@@ -390,6 +387,13 @@ def generate_vslam_bridge_unit_file(
 # Kiosk-related unit templates
 # ---------------------------------------------------------------------------
 
+_WESTON_EXEC_START = (
+    "/usr/bin/weston --shell=kiosk-shell.so"
+    " --idle-time=0"
+    " --log=/var/log/mower-jetson/weston.log"
+    " --continue-without-input"
+)
+
 _WESTON_UNIT_TEMPLATE = """\
 [Unit]
 Description=Weston kiosk compositor for mower display
@@ -399,7 +403,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/weston --shell=kiosk-shell.so --idle-time=0 --log=/var/log/mower-jetson/weston.log --continue-without-input
+ExecStart={weston_exec_start}
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 User={user}
 WorkingDirectory={home_dir}
@@ -437,7 +441,11 @@ def generate_weston_unit_file(
     home_dir: str = "/home/vincent",
 ) -> str:
     """Return the content of a systemd unit file for the mower-weston service."""
-    return _WESTON_UNIT_TEMPLATE.format(user=user, home_dir=home_dir)
+    return _WESTON_UNIT_TEMPLATE.format(
+        weston_exec_start=_WESTON_EXEC_START,
+        user=user,
+        home_dir=home_dir,
+    )
 
 
 def generate_mavproxy_unit_file(

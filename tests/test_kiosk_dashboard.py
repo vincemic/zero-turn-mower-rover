@@ -15,8 +15,6 @@ def _require_gtk4():
     """Try to load GTK 4.0; skip test if unavailable or no display."""
     try:
         gi.require_version("Gtk", "4.0")
-        from gi.repository import Gtk
-
         # GTK4 needs a display — skip if headless
         from gi.repository import Gdk
 

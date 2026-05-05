@@ -29,6 +29,7 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "types-PyYAML",
+    "types-pyserial",
     "pre-commit>=3.7",
 ]
 jetson = [
@@ -59,6 +60,9 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501"]
+
 [tool.ruff.lint.flake8-bugbear]
 # Typer relies on call expressions in defaults (Argument/Option) by design.
 extend-immutable-calls = ["typer.Argument", "typer.Option"]
@@ -87,3 +91,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["mower_rover.vslam.ipc"]
 warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = ["mower_rover.kiosk.dashboard"]
+disallow_subclassing_any = false

@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from mower_rover.kiosk.state import MavTelemetry, SharedState
 from mower_rover.kiosk.telemetry import mavlink_reader_loop
-
 
 # ---------------------------------------------------------------------------
 # MavTelemetry dataclass tests
@@ -72,7 +69,7 @@ class TestSharedState:
         """Concurrent writers and readers don't corrupt state."""
         state = SharedState()
         errors: list[Exception] = []
-        stop = threading.Event()
+        threading.Event()
 
         def writer() -> None:
             for i in range(200):

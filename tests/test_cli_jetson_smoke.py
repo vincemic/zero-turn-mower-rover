@@ -441,13 +441,13 @@ def test_jetson_zone_activate_invalid_zone_id(runner: CliRunner) -> None:
     result = runner.invoke(jetson_app, ["zone", "activate", "1ne"])
     assert result.exit_code == 1, result.output
     assert "Invalid zone_id format" in result.output
-    
+
     # Invalid: too long
     long_name = "a" * 33
     result = runner.invoke(jetson_app, ["zone", "activate", long_name])
     assert result.exit_code == 1, result.output
     assert "Invalid zone_id format" in result.output
-    
+
     # Invalid: uppercase
     result = runner.invoke(jetson_app, ["zone", "activate", "NE"])
     assert result.exit_code == 1, result.output

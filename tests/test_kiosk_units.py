@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from mower_rover.config.jetson import JetsonConfig, KioskConfig
+from mower_rover.kiosk.units import install_kiosk_units, uninstall_kiosk_units
 from mower_rover.safety.confirm import SafetyContext
 from mower_rover.service.unit import (
     KIOSK_UNIT_NAME,
@@ -18,8 +17,6 @@ from mower_rover.service.unit import (
     generate_unit_file,
     generate_weston_unit_file,
 )
-from mower_rover.kiosk.units import install_kiosk_units, uninstall_kiosk_units
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -125,8 +122,10 @@ class TestGenerateWestonUnit:
     def test_exec_start(self) -> None:
         content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
         assert (
-            "ExecStart=/usr/bin/weston --shell=kiosk-shell.so --idle-time=0 "
-            "--log=/var/log/mower-jetson/weston.log --continue-without-input"
+            "ExecStart=/usr/bin/weston --shell=kiosk-shell.so"
+            " --idle-time=0"
+            " --log=/var/log/mower-jetson/weston.log"
+            " --continue-without-input"
         ) in content
 
     def test_xdg_runtime_dir(self) -> None:

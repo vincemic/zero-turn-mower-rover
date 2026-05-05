@@ -7,23 +7,28 @@ mission planning, and upload orchestration with hardware safety checks.
 from __future__ import annotations
 
 import json
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import typer
 
-from mower_rover.zone.config import ZoneConfig, load_zone_config, load_all_zones
-from mower_rover.zone.planner import generate_waypoints
-from mower_rover.zone.mission_items import zone_to_mission, zone_to_fence, zone_to_rally
-from mower_rover.zone.geojson import export_multi_zone_geojson
-from mower_rover.mavlink.connection import ConnectionConfig, open_link
-from mower_rover.mavlink.mission import (
-    upload_mission, clear_mission, verify_round_trip, download_mission,
-)
-from mower_rover.safety.confirm import requires_confirmation, SafetyContext
-from mower_rover.transport.ssh import JetsonClient
 from mower_rover.config.laptop import JetsonEndpoint
 from mower_rover.logging_setup.setup import get_logger
+from mower_rover.mavlink.connection import ConnectionConfig, open_link
+from mower_rover.mavlink.mission import (
+    MissionItem,
+    clear_mission,
+    download_mission,
+    upload_mission,
+    verify_round_trip,
+)
+from mower_rover.safety.confirm import SafetyContext, requires_confirmation
+from mower_rover.transport.ssh import JetsonClient
+from mower_rover.zone.config import LatLon, RallyPoint, load_all_zones, load_zone_config
+from mower_rover.zone.geojson import export_multi_zone_geojson
+from mower_rover.zone.mission_items import zone_to_fence, zone_to_mission, zone_to_rally
+from mower_rover.zone.planner import generate_waypoints
 
 # Create Typer sub-apps
 zone_app = typer.Typer(name="zone", help="Zone management commands.", no_args_is_help=True)
@@ -46,7 +51,7 @@ class ZoneUploadError(RuntimeError):
 # ------------------------------------------------------------------
 
 
-def _check_not_armed(conn) -> None:
+def _check_not_armed(conn: Any) -> None:
     """Check that the flight controller is not armed."""
     from pymavlink import mavutil
 
@@ -55,15 +60,20 @@ def _check_not_armed(conn) -> None:
         raise typer.BadParameter("FC is armed — cannot switch zones. Disarm first.")
 
 
-def _upload_zone_atomically(conn, mission_items, fence_items, rally_items):
+def _upload_zone_atomically(
+    conn: Any,
+    mission_items: list[MissionItem],
+    fence_items: list[MissionItem],
+    rally_items: list[MissionItem],
+) -> None:
     """Upload zone mission items atomically with clear-on-failure.
-    
+
     Args:
         conn: MAVLink connection
         mission_items: Mission waypoints
-        fence_items: Fence boundary/exclusions  
+        fence_items: Fence boundary/exclusions
         rally_items: Rally points
-        
+
     Raises:
         ZoneUploadError: If upload fails (after clearing all missions for safety)
     """
@@ -82,13 +92,13 @@ def _upload_zone_atomically(conn, mission_items, fence_items, rally_items):
             clear_mission(conn, 2)  # RALLY
         except Exception:
             pass  # Best effort cleanup
-        raise ZoneUploadError("Zone upload FAILED. All missions cleared for safety.")
+        raise ZoneUploadError("Zone upload FAILED. All missions cleared for safety.") from None
 
 
-def _write_zone_snapshot(zone_id: str, waypoint_count: int, fence_count: int, 
-                        rally_point, path: Path) -> None:
+def _write_zone_snapshot(zone_id: str, waypoint_count: int, fence_count: int,
+                        rally_point: LatLon | RallyPoint, path: Path) -> None:
     """Write zone upload snapshot to JSON file.
-    
+
     Args:
         zone_id: Zone identifier
         waypoint_count: Number of waypoints uploaded
@@ -121,7 +131,7 @@ def _get_jetson_endpoint() -> JetsonEndpoint:
 
 def _activate_zone_on_jetson(zone_id: str, correlation_id: str, *, dry_run: bool = False) -> None:
     """Activate zone on Jetson via SSH and wait for VSLAM readiness.
-    
+
     Args:
         zone_id: Zone to activate
         correlation_id: Logging correlation ID
@@ -130,20 +140,22 @@ def _activate_zone_on_jetson(zone_id: str, correlation_id: str, *, dry_run: bool
     if dry_run:
         logger.info("dry_run: would SSH to activate zone", zone_id=zone_id)
         return
-        
+
     endpoint = _get_jetson_endpoint()
     client = JetsonClient(endpoint, correlation_id=correlation_id)
-    
+
     # Run zone activate command on Jetson
     result = client.run([
         "mower-jetson", "zone", "activate", zone_id
     ], timeout=30.0)
-    
+
     if not result.ok:
-        raise typer.ClickException(
-            f"Zone activation failed on Jetson: {result.stderr.strip()}"
+        typer.echo(
+            f"Zone activation failed on Jetson: {result.stderr.strip()}",
+            err=True,
         )
-    
+        raise typer.Exit(code=1)
+
     logger.info("zone activated on jetson", zone_id=zone_id)
 
 
@@ -160,33 +172,33 @@ def list_zones(
 ) -> None:
     """List all available zones with basic info."""
     logger.info("scanning zones directory", path=str(zones_dir))
-    
+
     if not zones_dir.exists():
         typer.echo(f"Zones directory not found: {zones_dir}")
         raise typer.Exit(1)
-    
+
     zones = load_all_zones(zones_dir)
-    
+
     if not zones:
         typer.echo("No valid zone files found.")
         return
-    
+
     # Display table header
     typer.echo("Zone ID      | Name                     | Boundary | Area Est.")
     typer.echo("-------------|--------------------------|----------|----------")
-    
+
     for zone in zones:
         # Rough area estimate (very approximate)
         boundary_count = len(zone.boundary)
         area_est = f"~{boundary_count * 100}m²"  # Placeholder calculation
-        
+
         # Truncate long names
         name = zone.name[:24] if len(zone.name) <= 24 else zone.name[:21] + "..."
-        
+
         typer.echo(
             f"{zone.zone_id:<12} | {name:<24} | {boundary_count:>8} | {area_est:>8}"
         )
-    
+
     typer.echo(f"\nTotal: {len(zones)} zones")
 
 
@@ -227,7 +239,7 @@ def select_zone(
         logger.info("loaded zone config", zone_id=zone.zone_id, name=zone.name)
     except Exception as e:
         typer.echo(f"Failed to load zone config: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     if dry_run:
         waypoints = generate_waypoints(zone)
@@ -289,30 +301,32 @@ def select_zone(
         typer.echo(f"  Snapshot: {snapshot_file}")
 
 
-@zone_app.command("resume")  
+@zone_app.command("resume")
 def resume_zone(
     zone_file: Path = typer.Argument(..., help="Zone YAML file to resume"),
     mavlink_endpoint: str = typer.Option(
-        "udp:127.0.0.1:14550", 
-        "--mavlink", 
+        "udp:127.0.0.1:14550",
+        "--mavlink",
         help="MAVLink connection endpoint"
     ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show info only, don't change mission index"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show info only, don't change mission index"
+    ),
 ) -> None:
     """Resume mission from current waypoint.
-    
+
     Reads MISSION_CURRENT from FC, displays resume info, and sets mission index.
     Does NOT arm or change mode - operator uses RC transmitter for that.
     """
     logger.info("zone resume starting", zone_file=str(zone_file))
-    
+
     # Load zone for display info
     try:
         zone = load_zone_config(zone_file)
     except Exception as e:
         typer.echo(f"Failed to load zone config: {e}")
-        raise typer.Exit(1)
-    
+        raise typer.Exit(1) from None
+
     # Connect to FC and get current mission state
     config = ConnectionConfig(endpoint=mavlink_endpoint)
     with open_link(config) as conn:
@@ -369,54 +383,54 @@ def resume_zone(
 def plan_mission(
     zone_file: Path = typer.Argument(..., help="Zone YAML file to plan"),
     output_dir: Path = typer.Option(
-        Path("zones/generated"), 
-        "--output-dir", 
+        Path("zones/generated"),
+        "--output-dir",
         help="Output directory for generated files"
     ),
 ) -> None:
     """Generate waypoints and write ArduPilot .waypoints file.
-    
+
     Runs the coverage planner and outputs mission in QGroundControl format.
     """
     logger.info("mission planning starting", zone_file=str(zone_file))
-    
+
     # Load zone config
     try:
         zone = load_zone_config(zone_file)
         logger.info("loaded zone config", zone_id=zone.zone_id)
     except Exception as e:
         typer.echo(f"Failed to load zone config: {e}")
-        raise typer.Exit(1)
-    
+        raise typer.Exit(1) from None
+
     # Generate waypoints
     try:
         waypoints = generate_waypoints(zone)
         logger.info("waypoints generated", count=len(waypoints))
     except Exception as e:
         typer.echo(f"Waypoint generation failed: {e}")
-        raise typer.Exit(1)
-    
+        raise typer.Exit(1) from None
+
     if not waypoints:
         typer.echo("No waypoints generated - zone may be too small")
         raise typer.Exit(1)
-    
+
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Generate output filename
     output_file = output_dir / f"{zone.zone_id}.waypoints"
-    
+
     # Write QGroundControl format
     with output_file.open("w", encoding="utf-8") as f:
         f.write("QGC WPL 110\n")  # QGroundControl waypoints header
-        
+
         # Home position (seq 0)
         f.write(f"0\t1\t0\t16\t0\t0\t0\t0\t{zone.home.lat:.8f}\t{zone.home.lon:.8f}\t0\t1\n")
-        
+
         # Waypoints (seq 1+)
         for i, wp in enumerate(waypoints, 1):
             f.write(f"{i}\t0\t0\t16\t0\t0\t0\t0\t{wp.lat:.8f}\t{wp.lon:.8f}\t0\t1\n")
-    
+
     logger.info("waypoints file written", path=str(output_file))
     typer.echo("Mission planned successfully")
     typer.echo(f"  Zone: {zone.name} ({zone.zone_id})")
@@ -427,58 +441,58 @@ def plan_mission(
 @mission_app.command("export-map")
 def export_map(
     zones_dir: Path = typer.Option(
-        Path("zones"), 
-        "--zones-dir", 
+        Path("zones"),
+        "--zones-dir",
         help="Directory containing zone YAML files"
     ),
     output: Path = typer.Option(
-        Path("zones/generated/map.geojson"), 
-        "--output", 
+        Path("zones/generated/map.geojson"),
+        "--output",
         help="Output GeoJSON file path"
     ),
 ) -> None:
     """Export all zones as a combined GeoJSON map.
-    
+
     Creates a GeoJSON file containing boundaries, exclusions, home points,
     and rally points for all zones. Suitable for loading in QGIS or web maps.
     Coverage paths are not included in multi-zone export.
     """
     logger.info("exporting zone map", zones_dir=str(zones_dir), output=str(output))
-    
+
     # Load all zones
     try:
         zones = load_all_zones(zones_dir)
     except Exception as e:
         typer.echo(f"Error loading zones: {e}", err=True)
-        raise typer.Exit(1)
-    
+        raise typer.Exit(1) from None
+
     if not zones:
         typer.echo("No zones found in directory", err=True)
         raise typer.Exit(1)
-    
+
     # Export to GeoJSON
     try:
         geojson = export_multi_zone_geojson(zones)
     except Exception as e:
         typer.echo(f"Error exporting GeoJSON: {e}", err=True)
-        raise typer.Exit(1)
-    
+        raise typer.Exit(1) from None
+
     # Write output file
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(geojson, indent=2) + "\n")
     except Exception as e:
         typer.echo(f"Error writing file: {e}", err=True)
-        raise typer.Exit(1)
-    
-    logger.info("map export complete", 
-                zone_count=len(zones), 
-                feature_count=len(geojson["features"]), 
+        raise typer.Exit(1) from None
+
+    logger.info("map export complete",
+                zone_count=len(zones),
+                feature_count=len(geojson["features"]),
                 output_path=str(output))
-    
+
     typer.echo(f"Map exported to {output}")
     typer.echo(f"  Zones: {len(zones)}")
     typer.echo(f"  Features: {len(geojson['features'])}")
-    
+
     zone_names = [zone.name for zone in zones]
     typer.echo(f"  Included: {', '.join(zone_names)}")

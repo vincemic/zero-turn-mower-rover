@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,10 +10,10 @@ from click.exceptions import Exit as ClickExit
 from typer.testing import CliRunner
 
 from mower_rover.cli.bringup import (
-    STEP_NAMES,
-    BringupContext,
     _DEFERRED_CHECKS,
     _HW_DEPENDENT,
+    STEP_NAMES,
+    BringupContext,
     _archive_binaries_check,
     _build_depthai_check,
     _build_rtabmap_check,
@@ -1614,57 +1613,46 @@ class TestDeferredAndHwDependentSets:
     """Verify module-level _DEFERRED_CHECKS and _HW_DEPENDENT constants."""
 
     def test_deferred_checks_importable(self) -> None:
-        from mower_rover.cli.bringup import _DEFERRED_CHECKS
 
         assert isinstance(_DEFERRED_CHECKS, frozenset)
 
     def test_hw_dependent_importable(self) -> None:
-        from mower_rover.cli.bringup import _HW_DEPENDENT
 
         assert isinstance(_HW_DEPENDENT, frozenset)
 
     def test_oakd_in_deferred_checks(self) -> None:
-        from mower_rover.cli.bringup import _DEFERRED_CHECKS
 
         assert "oakd" in _DEFERRED_CHECKS
 
     def test_oakd_in_hw_dependent(self) -> None:
-        from mower_rover.cli.bringup import _HW_DEPENDENT
 
         assert "oakd" in _HW_DEPENDENT
 
     def test_waveshare_hub_in_deferred_checks(self) -> None:
-        from mower_rover.cli.bringup import _DEFERRED_CHECKS
 
         assert "waveshare_hub" in _DEFERRED_CHECKS
 
     def test_waveshare_hub_in_hw_dependent(self) -> None:
-        from mower_rover.cli.bringup import _HW_DEPENDENT
 
         assert "waveshare_hub" in _HW_DEPENDENT
 
     def test_usbcore_quirks_in_deferred_checks(self) -> None:
-        from mower_rover.cli.bringup import _DEFERRED_CHECKS
 
         assert "usbcore_quirks" in _DEFERRED_CHECKS
 
     def test_oakd_udev_rule_in_deferred_checks(self) -> None:
-        from mower_rover.cli.bringup import _DEFERRED_CHECKS
 
         assert "oakd_udev_rule" in _DEFERRED_CHECKS
 
     def test_oakd_usb_autosuspend_in_deferred_checks(self) -> None:
-        from mower_rover.cli.bringup import _DEFERRED_CHECKS
 
         assert "oakd_usb_autosuspend" in _DEFERRED_CHECKS
 
     def test_oakd_usbfs_memory_in_deferred_checks(self) -> None:
-        from mower_rover.cli.bringup import _DEFERRED_CHECKS
 
         assert "oakd_usbfs_memory" in _DEFERRED_CHECKS
 
     def test_hw_dependent_is_subset_of_deferred(self) -> None:
-        from mower_rover.cli.bringup import _DEFERRED_CHECKS, _HW_DEPENDENT
 
         assert _HW_DEPENDENT.issubset(_DEFERRED_CHECKS)
 
@@ -1697,7 +1685,6 @@ class TestFinalVerify30sWait:
         mock_client.run.side_effect = side_effect
 
         sleep_calls: list[float] = []
-        original_sleep = time.sleep
 
         def mock_sleep(seconds: float) -> None:
             sleep_calls.append(seconds)

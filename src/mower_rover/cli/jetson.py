@@ -15,7 +15,6 @@ units are intentionally deferred until a phase needs one.
 
 from __future__ import annotations
 
-import getpass
 import json as _json
 import os
 import platform
@@ -41,7 +40,6 @@ from mower_rover.config.jetson import (
     load_jetson_config,
 )
 from mower_rover.config.vslam import (
-    DEFAULT_VSLAM_CONFIG_PATH,
     load_vslam_config,
     save_vslam_config,
 )
@@ -491,7 +489,10 @@ def service_install_command(
         None, "--target-user", help="User for the unit's User= line (default: current user)."
     ),
     target_home: str | None = typer.Option(
-        None, "--target-home", help="Home dir for the unit's WorkingDirectory= (default: current home)."
+        None,
+        "--target-home",
+        help="Home dir for the unit's WorkingDirectory="
+             " (default: current home).",
     ),
 ) -> None:
     """Install the mower-health systemd service."""
@@ -644,7 +645,10 @@ def vslam_install_command(
         None, "--target-user", help="User for the unit's User= line (default: current user)."
     ),
     target_home: str | None = typer.Option(
-        None, "--target-home", help="Home dir for the unit's WorkingDirectory= (default: current home)."
+        None,
+        "--target-home",
+        help="Home dir for the unit's WorkingDirectory="
+             " (default: current home).",
     ),
 ) -> None:
     """Install the mower-vslam systemd service."""
@@ -745,7 +749,10 @@ def vslam_bridge_install_command(
         None, "--target-user", help="User for the unit's User= line (default: current user)."
     ),
     target_home: str | None = typer.Option(
-        None, "--target-home", help="Home dir for the unit's WorkingDirectory= (default: current home)."
+        None,
+        "--target-home",
+        help="Home dir for the unit's WorkingDirectory="
+             " (default: current home).",
     ),
 ) -> None:
     """Install the mower-vslam-bridge systemd service."""
@@ -865,10 +872,15 @@ def zone_activate_command(
 ) -> None:
     """Activate a zone and configure VSLAM for that zone."""
     log = get_logger("cli-jetson").bind(op="zone_activate", zone_id=zone_id)
-    
+
     # Validate zone_id format: ^[a-z][a-z0-9_-]{0,31}$
     if not re.match(r"^[a-z][a-z0-9_-]{0,31}$", zone_id):
-        error_msg = f"Invalid zone_id format: '{zone_id}'. Must start with lowercase letter, contain only lowercase letters, numbers, underscores, or hyphens, and be 1-32 characters long."
+        error_msg = (
+            f"Invalid zone_id format: '{zone_id}'. Must start with"
+            " lowercase letter, contain only lowercase letters,"
+            " numbers, underscores, or hyphens, and be 1-32"
+            " characters long."
+        )
         log.error("invalid_zone_id", zone_id=zone_id)
         if json_out:
             typer.echo(_json.dumps({"error": error_msg}, indent=2))
@@ -878,7 +890,10 @@ def zone_activate_command(
 
     # Validate slam_mode
     if slam_mode not in ("auto", "mapping", "localization"):
-        error_msg = f"Invalid slam_mode: '{slam_mode}'. Must be 'auto', 'mapping', or 'localization'."
+        error_msg = (
+            f"Invalid slam_mode: '{slam_mode}'."
+            " Must be 'auto', 'mapping', or 'localization'."
+        )
         log.error("invalid_slam_mode", slam_mode=slam_mode)
         if json_out:
             typer.echo(_json.dumps({"error": error_msg}, indent=2))
@@ -898,27 +913,32 @@ def zone_activate_command(
     else:
         actual_slam_mode = slam_mode
 
-    log.info("slam_mode_determined", requested=slam_mode, actual=actual_slam_mode, db_exists=db_path.exists())
+    log.info(
+        "slam_mode_determined",
+        requested=slam_mode,
+        actual=actual_slam_mode,
+        db_exists=db_path.exists(),
+    )
 
     try:
         # Load current VSLAM config
         vslam_config = load_vslam_config()
-        
+
         # Update config
         vslam_config.database_path = db_path.as_posix()
         vslam_config.slam_mode = actual_slam_mode
-        
+
         # Save updated config
         save_vslam_config(vslam_config)
         log.info("vslam_config_updated", database_path=str(db_path), slam_mode=actual_slam_mode)
-        
+
         # Restart VSLAM services
         for service_name in [VSLAM_UNIT_NAME, VSLAM_BRIDGE_UNIT_NAME]:
             cmd = ["systemctl", "restart", f"{service_name}.service"]
             log.info("restarting_service", service=service_name, cmd=cmd)
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                log.error("service_restart_failed", service=service_name, 
+                log.error("service_restart_failed", service=service_name,
                          returncode=result.returncode, stderr=result.stderr)
                 error_msg = f"Failed to restart {service_name}.service: {result.stderr}"
                 if json_out:
@@ -926,9 +946,9 @@ def zone_activate_command(
                 else:
                     typer.echo(f"ERROR: {error_msg}", err=True)
                 raise typer.Exit(code=1)
-        
+
         log.info("zone_activated_successfully", zone_id=zone_id, slam_mode=actual_slam_mode)
-        
+
         if json_out:
             typer.echo(_json.dumps({
                 "zone_id": zone_id,
@@ -949,7 +969,7 @@ def zone_activate_command(
             typer.echo(_json.dumps({"error": error_msg}, indent=2))
         else:
             typer.echo(f"ERROR: {error_msg}", err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
 
 @zone_app.command("status")
@@ -959,42 +979,42 @@ def zone_status_command(
 ) -> None:
     """Show current zone status and VSLAM service status."""
     log = get_logger("cli-jetson").bind(op="zone_status")
-    
+
     try:
         # Load current VSLAM config
         vslam_config = load_vslam_config()
-        
+
         # Extract zone_id from database_path
         # Look for pattern: /var/lib/mower/zones/{zone_id}/rtabmap.db
         db_path = Path(vslam_config.database_path)
         zone_id = None
-        db_size_mb = 0
-        
+        db_size_mb: int | float = 0
+
         # Check if path matches zone pattern
         path_parts = db_path.parts
         if len(path_parts) >= 3 and "zones" in path_parts:
             zones_idx = path_parts.index("zones")
             if zones_idx + 1 < len(path_parts):
                 zone_id = path_parts[zones_idx + 1]
-        
+
         # Get DB file size if it exists
         if db_path.exists():
             db_size_bytes = db_path.stat().st_size
             db_size_mb = round(db_size_bytes / (1024 * 1024), 2)
-        
+
         # Check VSLAM service status
         result = subprocess.run(
             ["systemctl", "is-active", f"{VSLAM_UNIT_NAME}.service"],
             capture_output=True, text=True
         )
         service_active = result.returncode == 0 and result.stdout.strip() == "active"
-        
-        log.info("zone_status_collected", 
-                zone_id=zone_id, 
-                db_size_mb=db_size_mb, 
+
+        log.info("zone_status_collected",
+                zone_id=zone_id,
+                db_size_mb=db_size_mb,
                 service_active=service_active,
                 slam_mode=vslam_config.slam_mode)
-        
+
         if json_out:
             typer.echo(_json.dumps({
                 "zone_id": zone_id,
@@ -1010,7 +1030,7 @@ def zone_status_command(
             typer.echo(f"Database path: {vslam_config.database_path}")
             typer.echo(f"Database size: {db_size_mb} MB")
             typer.echo(f"VSLAM service: {'active' if service_active else 'inactive'}")
-            
+
     except Exception as e:
         log.error("zone_status_failed", error=str(e))
         error_msg = f"Failed to get zone status: {e}"
@@ -1018,7 +1038,7 @@ def zone_status_command(
             typer.echo(_json.dumps({"error": error_msg}, indent=2))
         else:
             typer.echo(f"ERROR: {error_msg}", err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
 
 # ---------------------------------------------------------------------------
@@ -1136,11 +1156,11 @@ def pixhawk_sync_uninstall_command(
     uninstall_pixhawk_sync_service(safety, user_level=user_level)
 
 
-def _check_not_armed(conn) -> None:
+def _check_not_armed(conn: object) -> None:
     """Check that the flight controller is not armed."""
     from pymavlink import mavutil
 
-    hb = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=5)
+    hb = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=5)  # type: ignore[attr-defined]
     if hb and (hb.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
         raise typer.BadParameter("FC is armed — cannot flash firmware. Disarm first.")
 
@@ -1155,24 +1175,29 @@ def pixhawk_firmware_check_command(
         help="MAVLink endpoint. Default: /dev/pixhawk (USB).",
     ),
     baud: int = typer.Option(0, help="Serial baud (0 for USB CDC)."),
-    track: str = typer.Option("stable", "--track", help="Firmware track (stable/beta/latest)."),
-    offline: bool = typer.Option(False, "--offline", help="Skip remote version check; use cache only."),
+    track: str = typer.Option(
+        "stable", "--track",
+        help="Firmware track (stable/beta/latest).",
+    ),
+    offline: bool = typer.Option(
+        False, "--offline",
+        help="Skip remote version check; use cache only.",
+    ),
     json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Check the current firmware version and compare to latest available.
-    
+
     Reads the running firmware version from the connected Pixhawk and optionally
     checks for updates on firmware.ardupilot.org. Exits 0 on success, 1 on error.
     Update availability is signaled via console text or JSON field, not exit code.
     """
     from mower_rover.pixhawk.firmware import (
-        read_running_version,
         check_remote_version,
+        read_running_version,
     )
 
     log = get_logger("cli-jetson").bind(op="firmware_check")
-    obj = ctx.obj or {}
-    
+
     config = ConnectionConfig(endpoint=endpoint, baud=baud)
     try:
         with open_link(config) as conn:
@@ -1188,21 +1213,28 @@ def pixhawk_firmware_check_command(
     if not running_version:
         log.error("firmware_check_version_read_failed")
         if json_out:
-            typer.echo(_json.dumps({"ok": False, "error": "could not read firmware version"}, indent=2))
+            typer.echo(_json.dumps(
+                {"ok": False, "error": "could not read firmware version"},
+                indent=2,
+            ))
         else:
             typer.echo("ERROR: could not read firmware version", err=True)
         raise typer.Exit(code=1) from None
 
     latest_version = None
     update_available = False
-    
+
     if not offline:
         try:
             latest_tuple = check_remote_version(track)
             if latest_tuple:
                 # Convert tuple back to version for comparison
                 latest_version = f"{latest_tuple[0]}.{latest_tuple[1]}.{latest_tuple[2]}"
-                running_tuple = (running_version.major, running_version.minor, running_version.patch)
+                running_tuple = (
+                    running_version.major,
+                    running_version.minor,
+                    running_version.patch,
+                )
                 update_available = latest_tuple > running_tuple
         except Exception as exc:
             log.warning("firmware_check_remote_failed", error=str(exc))
@@ -1244,30 +1276,35 @@ def pixhawk_firmware_update_command(
         help="MAVLink endpoint. Default: /dev/pixhawk (USB).",
     ),
     baud: int = typer.Option(0, help="Serial baud (0 for USB CDC)."),
-    track: str = typer.Option("stable", "--track", help="Firmware track (stable/beta/latest)."),
-    offline: bool = typer.Option(False, "--offline", help="Skip remote version check; use cache only."),
+    track: str = typer.Option(
+        "stable", "--track",
+        help="Firmware track (stable/beta/latest).",
+    ),
+    offline: bool = typer.Option(
+        False, "--offline",
+        help="Skip remote version check; use cache only.",
+    ),
     force: bool = typer.Option(False, "--force", help="Update even if same version."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
     json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Download and flash the latest firmware to the Pixhawk.
-    
+
     Full lifecycle: check versions → download → validate → snapshot params →
     confirm → reboot to bootloader → flash → verify. Use --force to update
     even if running the same version.
     """
-    from mower_rover.pixhawk.firmware import (
-        read_running_version,
-        check_remote_version,
-        download_firmware,
-        validate_apj,
-        reboot_to_bootloader,
-        wait_for_bootloader,
-        flash_firmware,
-        BOARD_ID_CUBE_ORANGE,
-    )
     from mower_rover.params.io import write_json_snapshot
     from mower_rover.params.mav import fetch_params
+    from mower_rover.pixhawk.firmware import (
+        check_remote_version,
+        download_firmware,
+        flash_firmware,
+        read_running_version,
+        reboot_to_bootloader,
+        validate_apj,
+        wait_for_bootloader,
+    )
 
     log = get_logger("cli-jetson").bind(op="firmware_update")
     obj = ctx.obj or {}
@@ -1275,7 +1312,7 @@ def pixhawk_firmware_update_command(
     safety = SafetyContext(dry_run=dry_run, assume_yes=yes)
 
     config = ConnectionConfig(endpoint=endpoint, baud=baud)
-    
+
     # Step 1: Read running version
     try:
         with open_link(config) as conn:
@@ -1291,7 +1328,10 @@ def pixhawk_firmware_update_command(
     if not running_version:
         log.error("firmware_update_version_read_failed")
         if json_out:
-            typer.echo(_json.dumps({"ok": False, "error": "could not read firmware version"}, indent=2))
+            typer.echo(_json.dumps(
+                {"ok": False, "error": "could not read firmware version"},
+                indent=2,
+            ))
         else:
             typer.echo("ERROR: could not read firmware version", err=True)
         raise typer.Exit(code=1) from None
@@ -1299,7 +1339,11 @@ def pixhawk_firmware_update_command(
     # Step 2: Check remote version (unless offline)
     if offline:
         if json_out:
-            typer.echo(_json.dumps({"ok": False, "error": "offline mode not supported for firmware-update"}, indent=2))
+            typer.echo(_json.dumps(
+                {"ok": False,
+                 "error": "offline mode not supported for firmware-update"},
+                indent=2,
+            ))
         else:
             typer.echo("ERROR: offline mode not supported for firmware-update", err=True)
         raise typer.Exit(code=1) from None
@@ -1328,14 +1372,18 @@ def pixhawk_firmware_update_command(
                 "latest_version": f"{latest_tuple[0]}.{latest_tuple[1]}.{latest_tuple[2]}",
             }, indent=2))
         else:
-            typer.echo(f"Already running {running_version.version_string} (latest: {latest_tuple[0]}.{latest_tuple[1]}.{latest_tuple[2]})")
+            typer.echo(
+                f"Already running {running_version.version_string}"
+                f" (latest: {latest_tuple[0]}.{latest_tuple[1]}"
+                f".{latest_tuple[2]})"
+            )
             typer.echo("Use --force to update anyway")
         return
 
     # Step 4: Download firmware
     try:
         cache_dir = Path("/var/cache/mower/firmware")
-        apj_path = download_firmware(latest_tuple, cache_dir, track=track)
+        apj_path = download_firmware(track, latest_tuple, cache_dir)
     except Exception as exc:
         log.error("firmware_update_download_failed", error=str(exc))
         if json_out:
@@ -1345,6 +1393,14 @@ def pixhawk_firmware_update_command(
         raise typer.Exit(code=1) from None
 
     # Step 5: Validate APJ
+    if apj_path is None:
+        log.error("firmware_update_download_returned_none")
+        if json_out:
+            typer.echo(_json.dumps({"ok": False, "error": "download returned no file"}, indent=2))
+        else:
+            typer.echo("ERROR: firmware download returned no file", err=True)
+        raise typer.Exit(code=1)
+
     try:
         validate_apj(apj_path)
     except Exception as exc:
@@ -1370,8 +1426,11 @@ def pixhawk_firmware_update_command(
 
     # Step 7: Confirmation
     target_version = f"{latest_tuple[0]}.{latest_tuple[1]}.{latest_tuple[2]}"
-    message = f"Flash firmware {target_version} to Pixhawk (replacing {running_version.version_string})?"
-    
+    message = (
+        f"Flash firmware {target_version} to Pixhawk"
+        f" (replacing {running_version.version_string})?"
+    )
+
     if dry_run:
         if json_out:
             typer.echo(_json.dumps({
@@ -1385,13 +1444,12 @@ def pixhawk_firmware_update_command(
             typer.echo(f"DRY RUN: would flash {target_version} from {apj_path}")
         return
 
-    if not safety.assume_yes:
-        if not _prompt_user(message):
-            if json_out:
-                typer.echo(_json.dumps({"ok": False, "cancelled": True}, indent=2))
-            else:
-                typer.echo("Update cancelled")
-            return
+    if not safety.assume_yes and not _prompt_user(message):
+        if json_out:
+            typer.echo(_json.dumps({"ok": False, "cancelled": True}, indent=2))
+        else:
+            typer.echo("Update cancelled")
+        return
 
     # Step 8: Check not armed
     try:
@@ -1427,18 +1485,25 @@ def pixhawk_firmware_update_command(
     except Exception as exc:
         log.error("firmware_update_bootloader_wait_failed", error=str(exc))
         if json_out:
-            typer.echo(_json.dumps({"ok": False, "error": f"bootloader wait failed: {exc}"}, indent=2))
+            typer.echo(_json.dumps(
+                {"ok": False,
+                 "error": f"bootloader wait failed: {exc}"},
+                indent=2,
+            ))
         else:
             typer.echo(f"ERROR: bootloader not ready: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
     # Step 11: Flash firmware
     try:
-        flash_result = flash_firmware(bootloader_port, apj_path, BOARD_ID_CUBE_ORANGE)
+        flash_result = flash_firmware(bootloader_port, apj_path)
         if not flash_result.success:
             raise Exception(flash_result.error_message or "flash failed")
         if not json_out:
-            typer.echo(f"✅ Flashed {flash_result.bytes_flashed} bytes in {flash_result.flash_time_s:.1f}s")
+            typer.echo(
+                f"✅ Flashed {flash_result.bytes_flashed}"
+                f" bytes in {flash_result.flash_time_s:.1f}s"
+            )
     except Exception as exc:
         log.error("firmware_update_flash_failed", error=str(exc))
         if json_out:
@@ -1451,7 +1516,7 @@ def pixhawk_firmware_update_command(
     if not json_out:
         typer.echo("⏳ Waiting for device re-enumeration...")
     time.sleep(5)
-    
+
     try:
         with open_link(config) as conn:
             new_version = read_running_version(conn)
@@ -1466,16 +1531,28 @@ def pixhawk_firmware_update_command(
                     "parameter_snapshot": str(snapshot_path),
                 }, indent=2))
             else:
-                typer.echo(f"🎉 Firmware update complete: {running_version.version_string} → {new_version.version_string}")
+                typer.echo(
+                    "🎉 Firmware update complete:"
+                    f" {running_version.version_string}"
+                    f" → {new_version.version_string}"
+                )
         else:
             if json_out:
-                typer.echo(_json.dumps({"ok": True, "warning": "could not verify new version"}, indent=2))
+                typer.echo(_json.dumps(
+                    {"ok": True,
+                     "warning": "could not verify new version"},
+                    indent=2,
+                ))
             else:
                 typer.echo("✅ Flash complete (could not verify new version)")
     except Exception as exc:
         log.warning("firmware_update_verify_failed", error=str(exc))
         if json_out:
-            typer.echo(_json.dumps({"ok": True, "warning": f"verification failed: {exc}"}, indent=2))
+            typer.echo(_json.dumps(
+                {"ok": True,
+                 "warning": f"verification failed: {exc}"},
+                indent=2,
+            ))
         else:
             typer.echo(f"✅ Flash complete (verification failed: {exc})")
 
@@ -1487,7 +1564,7 @@ def pixhawk_firmware_flash_command(
     endpoint: str = typer.Option(
         "/dev/pixhawk",
         "--port",
-        "--endpoint", 
+        "--endpoint",
         help="MAVLink endpoint. Default: /dev/pixhawk (USB).",
     ),
     baud: int = typer.Option(0, help="Serial baud (0 for USB CDC)."),
@@ -1496,20 +1573,19 @@ def pixhawk_firmware_flash_command(
     json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Flash a local .apj firmware file to the Pixhawk.
-    
+
     Simplified workflow: validate file → snapshot params → confirm →
     reboot to bootloader → flash → verify. Takes local .apj path as argument.
     """
-    from mower_rover.pixhawk.firmware import (
-        read_running_version,
-        validate_apj,
-        reboot_to_bootloader,
-        wait_for_bootloader,
-        flash_firmware,
-        BOARD_ID_CUBE_ORANGE,
-    )
     from mower_rover.params.io import write_json_snapshot
     from mower_rover.params.mav import fetch_params
+    from mower_rover.pixhawk.firmware import (
+        flash_firmware,
+        read_running_version,
+        reboot_to_bootloader,
+        validate_apj,
+        wait_for_bootloader,
+    )
 
     log = get_logger("cli-jetson").bind(op="firmware_flash")
     obj = ctx.obj or {}
@@ -1567,7 +1643,7 @@ def pixhawk_firmware_flash_command(
     # Step 5: Confirmation
     current_ver = running_version.version_string if running_version else "unknown"
     message = f"Flash firmware from {apj_path.name} to Pixhawk (current: {current_ver})?"
-    
+
     if dry_run:
         if json_out:
             typer.echo(_json.dumps({
@@ -1580,15 +1656,14 @@ def pixhawk_firmware_flash_command(
             typer.echo(f"DRY RUN: would flash from {apj_path}")
         return
 
-    if not safety.assume_yes:
-        if not _prompt_user(message):
-            if json_out:
-                typer.echo(_json.dumps({"ok": False, "cancelled": True}, indent=2))
-            else:
-                typer.echo("Flash cancelled")
-            return
+    if not safety.assume_yes and not _prompt_user(message):
+        if json_out:
+            typer.echo(_json.dumps({"ok": False, "cancelled": True}, indent=2))
+        else:
+            typer.echo("Flash cancelled")
+        return
 
-    # Step 6: Check not armed  
+    # Step 6: Check not armed
     try:
         with open_link(config) as conn:
             _check_not_armed(conn)
@@ -1622,18 +1697,25 @@ def pixhawk_firmware_flash_command(
     except Exception as exc:
         log.error("firmware_flash_bootloader_wait_failed", error=str(exc))
         if json_out:
-            typer.echo(_json.dumps({"ok": False, "error": f"bootloader wait failed: {exc}"}, indent=2))
+            typer.echo(_json.dumps(
+                {"ok": False,
+                 "error": f"bootloader wait failed: {exc}"},
+                indent=2,
+            ))
         else:
             typer.echo(f"ERROR: bootloader not ready: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
     # Step 9: Flash firmware
     try:
-        flash_result = flash_firmware(bootloader_port, apj_path, BOARD_ID_CUBE_ORANGE)
+        flash_result = flash_firmware(bootloader_port, apj_path)
         if not flash_result.success:
             raise Exception(flash_result.error_message or "flash failed")
         if not json_out:
-            typer.echo(f"✅ Flashed {flash_result.bytes_flashed} bytes in {flash_result.flash_time_s:.1f}s")
+            typer.echo(
+                f"✅ Flashed {flash_result.bytes_flashed}"
+                f" bytes in {flash_result.flash_time_s:.1f}s"
+            )
     except Exception as exc:
         log.error("firmware_flash_flash_failed", error=str(exc))
         if json_out:
@@ -1646,7 +1728,7 @@ def pixhawk_firmware_flash_command(
     if not json_out:
         typer.echo("⏳ Waiting for device re-enumeration...")
     time.sleep(5)
-    
+
     try:
         with open_link(config) as conn:
             new_version = read_running_version(conn)
@@ -1665,16 +1747,27 @@ def pixhawk_firmware_flash_command(
                 typer.echo(_json.dumps(output, indent=2))
             else:
                 old_ver = f" (was {current_ver})" if running_version else ""
-                typer.echo(f"🎉 Firmware flash complete: {new_version.version_string}{old_ver}")
+                typer.echo(
+                    "🎉 Firmware flash complete:"
+                    f" {new_version.version_string}{old_ver}"
+                )
         else:
             if json_out:
-                typer.echo(_json.dumps({"ok": True, "warning": "could not verify new version"}, indent=2))
+                typer.echo(_json.dumps(
+                    {"ok": True,
+                     "warning": "could not verify new version"},
+                    indent=2,
+                ))
             else:
                 typer.echo("✅ Flash complete (could not verify new version)")
     except Exception as exc:
         log.warning("firmware_flash_verify_failed", error=str(exc))
         if json_out:
-            typer.echo(_json.dumps({"ok": True, "warning": f"verification failed: {exc}"}, indent=2))
+            typer.echo(_json.dumps(
+                {"ok": True,
+                 "warning": f"verification failed: {exc}"},
+                indent=2,
+            ))
         else:
             typer.echo(f"✅ Flash complete (verification failed: {exc})")
 

@@ -49,15 +49,15 @@ from rich.table import Table
 
 from mower_rover.logging_setup.setup import get_logger
 from mower_rover.service.unit import (
+    KIOSK_UNIT_NAME,
+    MAVPROXY_UNIT_NAME,
     UNIT_NAME,
     VSLAM_BRIDGE_UNIT_NAME,
     VSLAM_UNIT_NAME,
     WESTON_UNIT_NAME,
-    KIOSK_UNIT_NAME,
-    MAVPROXY_UNIT_NAME,
-    generate_weston_unit_file,
-    generate_mavproxy_unit_file,
     generate_kiosk_unit_file,
+    generate_mavproxy_unit_file,
+    generate_weston_unit_file,
 )
 from mower_rover.transport.ssh import JetsonClient, SshError
 
@@ -523,7 +523,7 @@ _BUILD_APT_PACKAGES = (
 
 def _build_deps_check(client: JetsonClient) -> bool:
     """Return True if every package in _BUILD_APT_PACKAGES is installed."""
-    pkg_list = " ".join(_BUILD_APT_PACKAGES)
+    " ".join(_BUILD_APT_PACKAGES)
     try:
         r = client.run(
             ["dpkg", "-s", *_BUILD_APT_PACKAGES],
@@ -554,14 +554,12 @@ def _run_install_build_deps(client: JetsonClient, bctx: BringupContext) -> None:
             bctx.console.print(f"  {result.stderr.strip()}")
         raise typer.Exit(code=3)
     # Configure ccache now that it's installed
-    try:
+    with contextlib.suppress(SshError):
         client.run(
             ["sudo", "bash", "-c",
              "mkdir -p /var/lib/mower/ccache && CCACHE_DIR=/var/lib/mower/ccache ccache -M 5G"],
             timeout=15,
         )
-    except SshError:
-        pass  # non-fatal — ccache config is nice-to-have
 
 
 # ---------------------------------------------------------------------------
@@ -783,7 +781,9 @@ set -euo pipefail
 mkdir -p /tmp/rtabmap_slam_node/build
 cd /tmp/rtabmap_slam_node/build
 
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_PREFIX_PATH=/usr/local/lib/rtabmap-0.21
+cmake .. -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DCMAKE_PREFIX_PATH=/usr/local/lib/rtabmap-0.21
 make -j$(nproc)
 make install
 
@@ -1089,13 +1089,11 @@ def _run_service(client: JetsonClient, bctx: BringupContext) -> None:
 
     # Cleanup stale user-level units (non-elevated)
     bctx.console.print("  Cleaning up stale user-level units…")
-    try:
+    with contextlib.suppress(SshError):
         client.run(
             [f"~/.local/bin/mower-jetson service cleanup-user-units --unit {UNIT_NAME}"],
             timeout=30,
         )
-    except SshError:
-        pass  # Idempotent — ignore errors
 
     bctx.console.print("  Installing service…")
     try:
@@ -1426,7 +1424,7 @@ def _run_vslam_services(client: JetsonClient, bctx: BringupContext) -> None:
 
     # Cleanup stale user-level units (non-elevated, before sudo install)
     bctx.console.print("  Cleaning up stale user-level units…")
-    try:
+    with contextlib.suppress(SshError):
         client.run(
             [
                 f"~/.local/bin/mower-jetson service cleanup-user-units"
@@ -1434,8 +1432,6 @@ def _run_vslam_services(client: JetsonClient, bctx: BringupContext) -> None:
             ],
             timeout=30,
         )
-    except SshError:
-        pass  # Idempotent — ignore errors
 
     bctx.console.print("  Installing mower-vslam service…")
     try:
@@ -1600,7 +1596,7 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Installing MAVProxy via pip…")
     try:
         result = client.run(
-            [f"~/.local/share/uv/tools/mower-rover/bin/pip install MAVProxy"],
+            ["~/.local/share/uv/tools/mower-rover/bin/pip install MAVProxy"],
             timeout=300,
         )
     except SshError as exc:
@@ -1616,7 +1612,7 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Verifying MAVProxy…")
     try:
         result = client.run(
-            [f"~/.local/share/uv/tools/mower-rover/bin/mavproxy.py --version"],
+            ["~/.local/share/uv/tools/mower-rover/bin/mavproxy.py --version"],
             timeout=15,
         )
     except SshError as exc:
@@ -1629,7 +1625,6 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
 
     # 2. Deploy + start mower-mavproxy.service
     bctx.console.print("  Deploying mower-mavproxy service unit…")
-    mavproxy_bin = f"{home}/.local/share/uv/tools/mower-rover/bin/mavproxy.py"
     unit_content = generate_mavproxy_unit_file(
         master="/dev/pixhawk",
         outputs=["udp:127.0.0.1:14550", "udp:127.0.0.1:14551"],
@@ -1650,7 +1645,8 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
 
     try:
         result = client.run(
-            [f"sudo systemctl daemon-reload && sudo systemctl enable --now {MAVPROXY_UNIT_NAME}.service"],
+            ["sudo systemctl daemon-reload"
+             f" && sudo systemctl enable --now {MAVPROXY_UNIT_NAME}.service"],
             timeout=30,
         )
     except SshError as exc:
@@ -1689,7 +1685,8 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
 
             try:
                 client.run(
-                    [f"sudo bash -c 'cat > /etc/mower/vslam.yaml' << 'YAMLEOF'\n{new_yaml}\nYAMLEOF"],
+                    [f"sudo bash -c 'cat > /etc/mower/vslam.yaml'"
+                     f" << 'YAMLEOF'\n{new_yaml}\nYAMLEOF"],
                     timeout=30,
                 )
             except SshError as exc:
@@ -1717,7 +1714,10 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
         if result.ok:
             bctx.console.print("  [green]MAVProxy service active.[/green]")
         else:
-            bctx.console.print("  [yellow]MAVProxy service not yet active — may need Pixhawk connected.[/yellow]")
+            bctx.console.print(
+                "  [yellow]MAVProxy service not yet active"
+                " — may need Pixhawk connected.[/yellow]"
+            )
     except SshError:
         bctx.console.print("  [yellow]Could not verify MAVProxy (non-fatal).[/yellow]")
 
@@ -1754,7 +1754,7 @@ def _run_kiosk_services(client: JetsonClient, bctx: BringupContext) -> None:
 
     # Cleanup stale user-level units
     bctx.console.print("  Cleaning up stale user-level units…")
-    try:
+    with contextlib.suppress(SshError):
         client.run(
             [
                 f"~/.local/bin/mower-jetson service cleanup-user-units"
@@ -1762,8 +1762,6 @@ def _run_kiosk_services(client: JetsonClient, bctx: BringupContext) -> None:
             ],
             timeout=30,
         )
-    except SshError:
-        pass
 
     # Deploy Weston unit
     bctx.console.print("  Deploying mower-weston service…")

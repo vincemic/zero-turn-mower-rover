@@ -15,8 +15,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 import mower_rover.probe.checks  # noqa: F401 — trigger registration
 from mower_rover.probe.checks.oakd import check_oakd
 from mower_rover.probe.registry import _REGISTRY, Severity

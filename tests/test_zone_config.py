@@ -3,22 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 import pytest
 import yaml
 
 from mower_rover.zone.config import (
-    ZoneConfig,
-    ZoneConfigError,
     LatLon,
     RallyPoint,
-    ExclusionZone,
-    CoverageParams,
-    MissionCommands,
-    SlamOverrides,
-    OutputConfig,
+    ZoneConfig,
+    ZoneConfigError,
+    load_all_zones,
     load_zone_config,
     validate_zone_config,
-    load_all_zones,
 )
 
 
@@ -27,11 +23,11 @@ def test_zone_config_dataclasses_frozen() -> None:
     lat_lon = LatLon(lat=38.0, lon=-77.0)
     with pytest.raises(AttributeError):
         lat_lon.lat = 39.0  # type: ignore
-    
+
     rally = RallyPoint(lat=38.0, lon=-77.0, description="test")
     with pytest.raises(AttributeError):
         rally.description = "changed"  # type: ignore
-    
+
     zone_cfg = ZoneConfig(
         schema="mower-rover.zone.v1",
         zone_id="test",
@@ -97,13 +93,13 @@ def test_load_valid_zone_yaml(tmp_path: Path) -> None:
             "geojson_file": "test.geojson"
         }
     }
-    
+
     yaml_file = tmp_path / "test_zone.yaml"
     with yaml_file.open("w") as f:
         yaml.dump(zone_yaml, f)
-    
+
     cfg = load_zone_config(yaml_file)
-    
+
     assert cfg.schema == "mower-rover.zone.v1"
     assert cfg.zone_id == "test_zone"
     assert cfg.name == "Test Zone"
@@ -135,13 +131,13 @@ def test_load_zone_with_minimal_fields(tmp_path: Path) -> None:
             [38.89350, -77.03400]
         ]
     }
-    
+
     yaml_file = tmp_path / "minimal.yaml"
     with yaml_file.open("w") as f:
         yaml.dump(zone_yaml, f)
-    
+
     cfg = load_zone_config(yaml_file)
-    
+
     assert cfg.zone_id == "minimal"
     assert cfg.description == ""  # Default value
     assert len(cfg.exclusion_zones) == 0  # Default empty list
@@ -159,11 +155,11 @@ def test_load_zone_missing_required_field(tmp_path: Path) -> None:
         "rally_point": {"lat": 38.89505, "lon": -77.03655},
         "boundary": [[38.89510, -77.03660], [38.89510, -77.03400], [38.89350, -77.03400]]
     }
-    
+
     yaml_file = tmp_path / "incomplete.yaml"
     with yaml_file.open("w") as f:
         yaml.dump(zone_yaml, f)
-    
+
     with pytest.raises(ZoneConfigError, match="missing required field: name"):
         load_zone_config(yaml_file)
 
@@ -178,11 +174,11 @@ def test_load_zone_invalid_zone_id(tmp_path: Path) -> None:
         "rally_point": {"lat": 38.89505, "lon": -77.03655},
         "boundary": [[38.89510, -77.03660], [38.89510, -77.03400], [38.89350, -77.03400]]
     }
-    
+
     yaml_file = tmp_path / "invalid_id.yaml"
     with yaml_file.open("w") as f:
         yaml.dump(zone_yaml, f)
-    
+
     with pytest.raises(ZoneConfigError, match="zone_id: must match"):
         load_zone_config(yaml_file)
 
@@ -200,11 +196,11 @@ def test_load_zone_boundary_too_few_vertices(tmp_path: Path) -> None:
             [38.89510, -77.03400]  # Only 2 vertices
         ]
     }
-    
+
     yaml_file = tmp_path / "small_boundary.yaml"
     with yaml_file.open("w") as f:
         yaml.dump(zone_yaml, f)
-    
+
     with pytest.raises(ZoneConfigError, match="boundary: must have at least 3 vertices"):
         load_zone_config(yaml_file)
 
@@ -224,11 +220,11 @@ def test_load_zone_invalid_coverage_params(tmp_path: Path) -> None:
             "mow_speed_mps": 0  # Invalid: <= 0
         }
     }
-    
+
     yaml_file = tmp_path / "bad_coverage.yaml"
     with yaml_file.open("w") as f:
         yaml.dump(zone_yaml, f)
-    
+
     with pytest.raises(ZoneConfigError, match="coverage.cutting_width_in: must be > 0"):
         load_zone_config(yaml_file)
 
@@ -243,7 +239,7 @@ def test_load_zone_invalid_yaml(tmp_path: Path) -> None:
     """Test that malformed YAML raises ZoneConfigError."""
     yaml_file = tmp_path / "bad.yaml"
     yaml_file.write_text("invalid: yaml: content: [unclosed")
-    
+
     with pytest.raises(ZoneConfigError, match="Invalid YAML"):
         load_zone_config(yaml_file)
 
@@ -252,7 +248,7 @@ def test_load_zone_empty_yaml(tmp_path: Path) -> None:
     """Test that empty YAML raises ZoneConfigError."""
     yaml_file = tmp_path / "empty.yaml"
     yaml_file.write_text("")
-    
+
     with pytest.raises(ZoneConfigError, match="Empty YAML file"):
         load_zone_config(yaml_file)
 
@@ -272,7 +268,7 @@ def test_validate_zone_config_valid() -> None:
             LatLon(lat=38.89350, lon=-77.03660)
         ]
     )
-    
+
     issues = validate_zone_config(cfg)
     # Should have no ERROR issues (may have some WARNs)
     error_issues = [issue for issue in issues if issue[0] == "ERROR"]
@@ -293,14 +289,14 @@ def test_validate_zone_config_invalid_lat_lon() -> None:
             LatLon(lat=38.89350, lon=-77.03400)
         ]
     )
-    
+
     issues = validate_zone_config(cfg)
     error_issues = [issue for issue in issues if issue[0] == "ERROR"]
-    
+
     # Should catch both invalid lat and lon
     lat_errors = [issue for issue in error_issues if "lat: must be -90 to 90" in issue[1]]
     lon_errors = [issue for issue in error_issues if "lon: must be -180 to 180" in issue[1]]
-    
+
     assert len(lat_errors) >= 1
     assert len(lon_errors) >= 1
 
@@ -320,10 +316,10 @@ def test_validate_zone_config_warnings() -> None:
             LatLon(lat=38.89350, lon=-77.03660)
         ]
     )
-    
+
     issues = validate_zone_config(cfg)
     warn_issues = [issue for issue in issues if issue[0] == "WARN"]
-    
+
     # Should warn about rally point outside boundary
     rally_warnings = [issue for issue in warn_issues if "rally_point should be inside" in issue[1]]
     assert len(rally_warnings) >= 1
@@ -333,7 +329,7 @@ def test_load_all_zones_valid_directory(tmp_path: Path) -> None:
     """Test loading all zones from directory with valid files."""
     zones_dir = tmp_path / "zones"
     zones_dir.mkdir()
-    
+
     # Create valid zone files
     zone1_yaml = {
         "schema": "mower-rover.zone.v1",
@@ -343,7 +339,7 @@ def test_load_all_zones_valid_directory(tmp_path: Path) -> None:
         "rally_point": {"lat": 38.89505, "lon": -77.03655},
         "boundary": [[38.89510, -77.03660], [38.89510, -77.03400], [38.89350, -77.03400]]
     }
-    
+
     zone2_yaml = {
         "schema": "mower-rover.zone.v1",
         "zone_id": "zone2",
@@ -352,15 +348,15 @@ def test_load_all_zones_valid_directory(tmp_path: Path) -> None:
         "rally_point": {"lat": 38.89515, "lon": -77.03665},
         "boundary": [[38.89520, -77.03670], [38.89520, -77.03410], [38.89360, -77.03410]]
     }
-    
+
     with (zones_dir / "zone1.yaml").open("w") as f:
         yaml.dump(zone1_yaml, f)
-    
+
     with (zones_dir / "zone2.yaml").open("w") as f:
         yaml.dump(zone2_yaml, f)
-    
+
     configs = load_all_zones(zones_dir)
-    
+
     assert len(configs) == 2
     zone_ids = {cfg.zone_id for cfg in configs}
     assert zone_ids == {"zone1", "zone2"}
@@ -370,7 +366,7 @@ def test_load_all_zones_skips_invalid_files(tmp_path: Path) -> None:
     """Test that load_all_zones skips invalid files gracefully."""
     zones_dir = tmp_path / "zones"
     zones_dir.mkdir()
-    
+
     # Valid zone file
     valid_yaml = {
         "schema": "mower-rover.zone.v1",
@@ -380,23 +376,23 @@ def test_load_all_zones_skips_invalid_files(tmp_path: Path) -> None:
         "rally_point": {"lat": 38.89505, "lon": -77.03655},
         "boundary": [[38.89510, -77.03660], [38.89510, -77.03400], [38.89350, -77.03400]]
     }
-    
+
     with (zones_dir / "valid.yaml").open("w") as f:
         yaml.dump(valid_yaml, f)
-    
+
     # Invalid zone file (missing required fields)
     with (zones_dir / "invalid.yaml").open("w") as f:
         yaml.dump({"schema": "mower-rover.zone.v1", "zone_id": "invalid"}, f)
-    
-    # Non-zone YAML file  
+
+    # Non-zone YAML file
     with (zones_dir / "other.yaml").open("w") as f:
         yaml.dump({"schema": "some-other.schema.v1", "data": "not a zone"}, f)
-    
+
     # Malformed YAML file
     (zones_dir / "malformed.yaml").write_text("invalid: yaml: [")
-    
+
     configs = load_all_zones(zones_dir)
-    
+
     # Should only load the valid zone file
     assert len(configs) == 1
     assert configs[0].zone_id == "valid"
@@ -406,7 +402,7 @@ def test_load_all_zones_empty_directory(tmp_path: Path) -> None:
     """Test load_all_zones with empty directory."""
     zones_dir = tmp_path / "zones"
     zones_dir.mkdir()
-    
+
     configs = load_all_zones(zones_dir)
     assert len(configs) == 0
 
@@ -427,11 +423,11 @@ def test_latlng_coercion_from_list() -> None:
         "rally_point": {"lat": 38.89505, "lon": -77.03655},  # Dict format
         "boundary": [[38.89510, -77.03660], [38.89510, -77.03400], [38.89350, -77.03400]]
     }
-    
+
     # Use _coerce to test the conversion directly
     from mower_rover.zone.config import _coerce
     cfg = _coerce(zone_yaml)
-    
+
     assert cfg.home.lat == 38.89510
     assert cfg.home.lon == -77.03660
 
@@ -458,10 +454,10 @@ def test_exclusion_zone_validation() -> None:
             }
         ]
     }
-    
+
     from mower_rover.zone.config import _coerce
     cfg = _coerce(zone_yaml)
-    
+
     assert len(cfg.exclusion_zones) == 1
     assert cfg.exclusion_zones[0].name == "valid_exclusion"
     assert cfg.exclusion_zones[0].buffer_m == 1.0

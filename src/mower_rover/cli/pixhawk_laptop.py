@@ -8,12 +8,11 @@ from pathlib import Path
 import typer
 
 from mower_rover.cli.jetson_remote import (
-    _HostOpt,
-    _UserOpt, 
-    _PortOpt,
-    _KeyOpt,
     _CfgOpt,
+    _HostOpt,
+    _KeyOpt,
     _StrictOpt,
+    _UserOpt,
     client_for,
     resolve_endpoint,
 )
@@ -46,7 +45,7 @@ def firmware_check_command(
 ) -> None:
     """Check the current firmware version on the Pixhawk."""
     log = get_logger("cli.pixhawk").bind(op="firmware_check")
-    
+
     # Build remote command
     remote_argv = ["mower-jetson", "pixhawk", "firmware-check"]
     if track != "latest":
@@ -57,17 +56,17 @@ def firmware_check_command(
         remote_argv.append("--json")
     if port != "/dev/ttyACM0":
         remote_argv.extend(["--port", port])
-    
+
     endpoint = resolve_endpoint(host, user, ssh_port, key, config)
     client = client_for(ctx, endpoint, strict_host_keys)
-    
+
     try:
         result = client.run(remote_argv, timeout=60.0)
     except SshError as exc:
         log.error("ssh_error", error=str(exc))
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(code=3) from exc
-    
+
     if result.stdout:
         sys.stdout.write(result.stdout)
         sys.stdout.flush()
@@ -80,7 +79,7 @@ def firmware_check_command(
 # --- firmware-update --------------------------------------------------------
 
 
-@app.command("firmware-update")  
+@app.command("firmware-update")
 def firmware_update_command(
     ctx: typer.Context,
     track: str = typer.Option("latest", "--track", help="Track to download: latest, beta, stable"),
@@ -97,7 +96,7 @@ def firmware_update_command(
 ) -> None:
     """Download and flash the latest firmware to the Pixhawk."""
     log = get_logger("cli.pixhawk").bind(op="firmware_update")
-    
+
     # Build remote command
     remote_argv = ["mower-jetson", "pixhawk", "firmware-update"]
     if track != "latest":
@@ -110,22 +109,22 @@ def firmware_update_command(
         remote_argv.append("--json")
     if port != "/dev/ttyACM0":
         remote_argv.extend(["--port", port])
-    
+
     # Pass through dry-run from context
     dry_run = bool(ctx.obj and ctx.obj.get("dry_run"))
     if dry_run:
         remote_argv.append("--dry-run")
-    
+
     endpoint = resolve_endpoint(host, user, ssh_port, key, config)
     client = client_for(ctx, endpoint, strict_host_keys)
-    
+
     try:
         result = client.run(remote_argv, timeout=300.0)  # Higher timeout for download + flash
     except SshError as exc:
         log.error("ssh_error", error=str(exc))
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(code=3) from exc
-    
+
     if result.stdout:
         sys.stdout.write(result.stdout)
         sys.stdout.flush()
@@ -143,7 +142,9 @@ def firmware_flash_command(
     ctx: typer.Context,
     remote_path: str = typer.Argument(..., help="Path to .apj firmware file on the Jetson"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Assume yes on confirmations"),
-    skip_snapshot: bool = typer.Option(False, "--skip-snapshot", help="Skip param backup before flash"),
+    skip_snapshot: bool = typer.Option(
+        False, "--skip-snapshot", help="Skip param backup before flash"
+    ),
     json: bool = typer.Option(False, "--json", help="JSON output format"),
     port: str = typer.Option("/dev/ttyACM0", "--port", help="Pixhawk device path"),
     host: str | None = _HostOpt,
@@ -155,7 +156,7 @@ def firmware_flash_command(
 ) -> None:
     """Flash a .apj firmware file that's already on the Jetson to the Pixhawk."""
     log = get_logger("cli.pixhawk").bind(op="firmware_flash", remote_path=remote_path)
-    
+
     # Build remote command
     remote_argv = ["mower-jetson", "pixhawk", "firmware-flash", remote_path]
     if yes:
@@ -166,22 +167,22 @@ def firmware_flash_command(
         remote_argv.append("--json")
     if port != "/dev/ttyACM0":
         remote_argv.extend(["--port", port])
-    
+
     # Pass through dry-run from context
     dry_run = bool(ctx.obj and ctx.obj.get("dry_run"))
     if dry_run:
         remote_argv.append("--dry-run")
-    
+
     endpoint = resolve_endpoint(host, user, ssh_port, key, config)
     client = client_for(ctx, endpoint, strict_host_keys)
-    
+
     try:
         result = client.run(remote_argv, timeout=300.0)  # Higher timeout for flash operation
     except SshError as exc:
         log.error("ssh_error", error=str(exc))
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(code=3) from exc
-    
+
     if result.stdout:
         sys.stdout.write(result.stdout)
         sys.stdout.flush()

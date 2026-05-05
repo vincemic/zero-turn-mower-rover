@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,7 +14,6 @@ from mower_rover.cli.bringup import (
 )
 from mower_rover.config.laptop import JetsonEndpoint
 from mower_rover.transport.ssh import JetsonClient, SshError, SshResult
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

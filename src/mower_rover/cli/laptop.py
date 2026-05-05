@@ -10,7 +10,7 @@ from mower_rover.cli.jetson_remote import app as jetson_remote_app
 from mower_rover.cli.params import app as params_app
 from mower_rover.cli.pixhawk_laptop import app as pixhawk_app
 from mower_rover.cli.vslam_laptop import app as vslam_app
-from mower_rover.cli.zone_laptop import zone_app, mission_app
+from mower_rover.cli.zone_laptop import mission_app, zone_app
 from mower_rover.logging_setup.setup import configure_logging, get_logger
 
 app = typer.Typer(

@@ -14,7 +14,7 @@ import importlib.resources
 import os
 import re
 import tempfile
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from mower_rover.logging_setup.setup import get_logger
 
@@ -34,7 +34,7 @@ _ERRNO_HINTS: dict[int, str] = {
 }
 
 
-def _decode_ftp_error(ret: object, op: str, path: str) -> str:
+def _decode_ftp_error(ret: Any, op: str, path: str) -> str:
     """Format an FTP NAK as ``"{op} {path}: <reason>"`` with errno hints.
 
     When ``ret.error_code`` is ``FailErrno`` (2), include the POSIX errno
@@ -113,7 +113,7 @@ class _FTPSession:
         data = self._ftp.read(path, 0x40000)
         if data is None:
             raise OSError(f"read {path}: FTP transfer failed")
-        return data
+        return bytes(data)
 
     def write_file(self, path: str, data: bytes) -> None:
         """Upload *data* to *path* on the remote SD card."""
