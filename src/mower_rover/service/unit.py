@@ -41,7 +41,7 @@ StartLimitBurst=5
 Type={service_type}
 ExecStart={exec_start}
 Environment=MOWER_CORRELATION_ID=daemon
-User={user}
+{extra_environment}User={user}
 WorkingDirectory={home_dir}
 WatchdogSec={watchdog_sec}
 {timeout_start_sec}{runtime_directory}Restart=on-failure
@@ -62,7 +62,7 @@ StartLimitBurst=5
 Type={service_type}
 ExecStart={exec_start}
 Environment=MOWER_CORRELATION_ID=daemon
-WorkingDirectory={home_dir}
+{extra_environment}WorkingDirectory={home_dir}
 WatchdogSec={watchdog_sec}
 {timeout_start_sec}{runtime_directory}Restart=on-failure
 RestartSec=5
@@ -85,6 +85,7 @@ def generate_service_unit(
     timeout_start_sec: int | None = None,
     runtime_directory: str | None = None,
     service_type: str = "notify",
+    extra_environment: dict[str, str] | None = None,
 ) -> str:
     """Return a systemd unit file from the generic template.
 
@@ -97,6 +98,11 @@ def generate_service_unit(
     timeout_line = (
         f"TimeoutStartSec={timeout_start_sec}\n" if timeout_start_sec else ""
     )
+    extra_env_lines = ""
+    if extra_environment:
+        extra_env_lines = "".join(
+            f"Environment={k}={v}\n" for k, v in extra_environment.items()
+        )
     template = _GENERIC_USER_TEMPLATE if user_level else _GENERIC_SYSTEM_TEMPLATE
     return template.format(
         description=description,
@@ -109,6 +115,7 @@ def generate_service_unit(
         timeout_start_sec=timeout_line,
         runtime_directory=runtime_dir_line,
         service_type=service_type,
+        extra_environment=extra_env_lines,
     )
 
 
@@ -388,7 +395,8 @@ def generate_vslam_bridge_unit_file(
 # ---------------------------------------------------------------------------
 
 _WESTON_EXEC_START = (
-    "/usr/bin/weston --shell=kiosk-shell.so"
+    "/usr/bin/weston --shell=desktop-shell.so"
+    " --drm-device=card0"
     " --idle-time=0"
     " --log=/var/log/mower-jetson/weston.log"
     " --continue-without-input"
@@ -397,18 +405,21 @@ _WESTON_EXEC_START = (
 _WESTON_UNIT_TEMPLATE = """\
 [Unit]
 Description=Weston kiosk compositor for mower display
-After=multi-user.target
-StartLimitIntervalSec=300
-StartLimitBurst=5
+After=multi-user.target systemd-modules-load.service
+StartLimitIntervalSec=120
+StartLimitBurst=30
 
 [Service]
 Type=simple
+ExecCondition=/usr/local/bin/gpu-egl-ready
+ExecStartPre=/bin/mkdir -p /var/log/mower-jetson
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do [ -e /dev/dri/card0 ] && exit 0; sleep 1; done; echo "DRM device not found"; exit 1'
 ExecStart={weston_exec_start}
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 User={user}
 WorkingDirectory={home_dir}
 Restart=always
-RestartSec=3
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
@@ -484,6 +495,10 @@ def generate_kiosk_unit_file(
         binds_to=f"{WESTON_UNIT_NAME}.service",
         watchdog_sec=30,
         service_type="notify",
+        extra_environment={
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+            "WAYLAND_DISPLAY": "wayland-0",
+        },
     )
 
 

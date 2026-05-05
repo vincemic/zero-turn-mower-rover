@@ -122,7 +122,8 @@ class TestGenerateWestonUnit:
     def test_exec_start(self) -> None:
         content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
         assert (
-            "ExecStart=/usr/bin/weston --shell=kiosk-shell.so"
+            "ExecStart=/usr/bin/weston --shell=desktop-shell.so"
+            " --drm-device=card0"
             " --idle-time=0"
             " --log=/var/log/mower-jetson/weston.log"
             " --continue-without-input"
@@ -136,9 +137,21 @@ class TestGenerateWestonUnit:
         content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
         assert "Restart=always" in content
 
-    def test_restart_sec_3(self) -> None:
+    def test_restart_sec_2(self) -> None:
         content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
-        assert "RestartSec=3" in content
+        assert "RestartSec=2" in content
+
+    def test_start_limit_burst_30(self) -> None:
+        content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
+        assert "StartLimitBurst=30" in content
+
+    def test_no_nvidia_smi(self) -> None:
+        content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
+        assert "nvidia-smi" not in content
+
+    def test_exec_condition_gpu_probe(self) -> None:
+        content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
+        assert "ExecCondition=/usr/local/bin/gpu-egl-ready" in content
 
     def test_user_field(self) -> None:
         content = generate_weston_unit_file(user="testuser", home_dir="/home/testuser")
@@ -258,6 +271,18 @@ class TestGenerateKioskUnit:
             mower_jetson_path="/home/vincent/.local/bin/mower-jetson",
         )
         assert "WantedBy=multi-user.target" in content
+
+    def test_wayland_display_env(self) -> None:
+        content = generate_kiosk_unit_file(
+            mower_jetson_path="/home/vincent/.local/bin/mower-jetson",
+        )
+        assert "Environment=WAYLAND_DISPLAY=wayland-0" in content
+
+    def test_xdg_runtime_dir_env(self) -> None:
+        content = generate_kiosk_unit_file(
+            mower_jetson_path="/home/vincent/.local/bin/mower-jetson",
+        )
+        assert "Environment=XDG_RUNTIME_DIR=/run/user/1000" in content
 
 
 # ---------------------------------------------------------------------------

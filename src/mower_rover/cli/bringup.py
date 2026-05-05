@@ -518,6 +518,10 @@ _BUILD_APT_PACKAGES = (
     "libsystemd-dev",
     "libyaml-cpp-dev",
     "sqlite3",
+    "libgirepository1.0-dev",
+    "libcairo2-dev",
+    "gir1.2-gtk-4.0",
+    "libegl-dev",
 )
 
 
@@ -1770,6 +1774,43 @@ def _run_kiosk_services(client: JetsonClient, bctx: BringupContext) -> None:
             ],
             timeout=30,
         )
+
+    # Build and install EGL probe binary
+    bctx.console.print("  Building gpu-egl-ready probe…")
+    contrib_egl_dir = bctx.project_root / "contrib" / "gpu-egl-ready"
+    if not contrib_egl_dir.is_dir():
+        bctx.console.print(
+            f"  [red]contrib/gpu-egl-ready not found:[/red] {contrib_egl_dir}"
+        )
+        raise typer.Exit(code=3)
+
+    with contextlib.suppress(SshError):
+        client.run(["mkdir", "-p", "/tmp/gpu-egl-ready"], timeout=10)
+    for f in contrib_egl_dir.rglob("*"):
+        if f.is_file():
+            rel = f.relative_to(contrib_egl_dir)
+            remote = f"/tmp/gpu-egl-ready/{rel.as_posix()}"
+            try:
+                client.push(f, remote)
+            except SshError as exc:
+                bctx.console.print(f"  [red]Push failed ({rel}):[/red] {exc}")
+                raise typer.Exit(code=3) from exc
+    try:
+        result = client.run(
+            ["sudo", "bash", "/tmp/gpu-egl-ready/build.sh"],
+            timeout=60,
+        )
+        if not result.ok:
+            bctx.console.print(
+                f"  [red]gpu-egl-ready build failed (exit {result.returncode}).[/red]"
+            )
+            raise typer.Exit(code=3)
+    except SshError as exc:
+        bctx.console.print(f"  [red]gpu-egl-ready build failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+    finally:
+        with contextlib.suppress(SshError):
+            client.run(["rm", "-rf", "/tmp/gpu-egl-ready"], timeout=10)
 
     # Deploy Weston unit
     bctx.console.print("  Deploying mower-weston service…")
