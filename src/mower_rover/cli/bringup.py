@@ -1592,11 +1592,15 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
     user = client.endpoint.user
     home = f"/home/{user}"
 
-    # 1. Install MAVProxy via pip
+    # 1. Install MAVProxy via uv pip into the tool venv
     bctx.console.print("  Installing MAVProxy via pip…")
     try:
         result = client.run(
-            ["~/.local/share/uv/tools/mower-rover/bin/pip install MAVProxy"],
+            [
+                "~/.local/bin/uv pip install --python"
+                " ~/.local/share/uv/tools/mower-rover/bin/python"
+                " MAVProxy future setuptools"
+            ],
             timeout=300,
         )
     except SshError as exc:
