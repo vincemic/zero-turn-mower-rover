@@ -1507,7 +1507,7 @@ def _run_pixhawk_sync(client: JetsonClient, bctx: BringupContext) -> None:
         result = client.run(
             [
                 f"sudo ~/.local/bin/mower-jetson pixhawk sync-install --yes"
-                f" --target-user {user} --target-home {home}",
+                f" --system --target-user {user} --target-home {home}",
             ],
             timeout=60,
         )
