@@ -30,7 +30,7 @@ kiosk_app = typer.Typer(
 KIOSK_UNITS = [
     "mower-weston.service",
     "mower-kiosk.service",
-    "mavproxy.service",
+    "mower-mavproxy.service",
 ]
 
 

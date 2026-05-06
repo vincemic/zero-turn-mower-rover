@@ -134,14 +134,18 @@ class DashboardWindow(Gtk.ApplicationWindow):
         # Card 0: VSLAM Status
         vslam = snap.get("vslam", {})
         c = self._cards[0]
-        c.set_metric(0, "Confidence", str(vslam.get("confidence", "--")))
-        c.set_metric(1, "Resets", str(vslam.get("reset_counter", "--")))
-        c.set_metric(2, "X", f"{vslam.get('x', 0.0):.2f}")
-        c.set_metric(3, "Y", f"{vslam.get('y', 0.0):.2f}")
+        rate_hz = vslam.get("rate_hz", "--")
+        c.set_metric(0, "Rate", f"{rate_hz} Hz" if rate_hz != "--" else "--")
+        c.set_metric(1, "Confidence", str(vslam.get("confidence", "--")))
+        age_ms = vslam.get("age_ms", "--")
+        c.set_metric(2, "Pose Age", f"{age_ms} ms" if age_ms != "--" else "--")
+        cov = vslam.get("covariance_norm", "--")
+        c.set_metric(3, "Covariance", str(cov))
         vslam_conf = vslam.get("confidence", 0)
-        if vslam_conf >= 2:
+        vslam_age = vslam.get("age_ms", 9999)
+        if vslam_conf >= 2 and vslam_age < 1000:
             c.set_status("ok")
-        elif vslam_conf == 1:
+        elif vslam_conf == 1 or 1000 <= vslam_age <= 3000:
             c.set_status("warn")
         else:
             c.set_status("fail")

@@ -1,6 +1,6 @@
 """Kiosk application entry point.
 
-Creates SharedState, starts background reader threads (VSLAM, MAVLink,
+Creates SharedState, starts background reader threads (MAVLink,
 slow poller), and runs the GTK4 main loop.  Integrates sdnotify for
 systemd watchdog support.
 """
@@ -36,35 +36,6 @@ except ImportError:
 # ── Background reader threads ────────────────────────────────────────────────
 
 
-def _vslam_reader_thread(state: SharedState, shutdown: threading.Event) -> None:
-    """Read VSLAM pose messages from Unix socket and update state."""
-    try:
-        from mower_rover.vslam.ipc import PoseReader
-    except ImportError:
-        _log.warning("vslam_ipc_unavailable")
-        return
-
-    socket_path = "/run/mower/vslam_pose.sock"
-    reader = PoseReader(socket_path, reconnect_delay_s=2.0)
-
-    try:
-        for pose in reader.read_poses():
-            if shutdown.is_set():
-                break
-            state.update_vslam(
-                x=pose.x,
-                y=pose.y,
-                z=pose.z,
-                confidence=pose.confidence,
-                reset_counter=pose.reset_counter,
-            )
-    except Exception as exc:  # noqa: BLE001
-        if not shutdown.is_set():
-            _log.error("vslam_reader_error", error=str(exc), exc_info=exc)
-    finally:
-        reader.close()
-
-
 def _mavlink_reader_thread(
     state: SharedState,
     shutdown: threading.Event,
@@ -84,6 +55,7 @@ def _slow_poller_thread(
     state: SharedState,
     shutdown: threading.Event,
     sysroot: Path,
+    service_units: list[str] | None = None,
 ) -> None:
     """Poll slow-changing system state every 5 seconds.
 
@@ -93,9 +65,9 @@ def _slow_poller_thread(
 
     while not shutdown.is_set():
         try:
-            _poll_health(state, sysroot)
+            _poll_health(state, sysroot, service_units=service_units)
         except Exception as exc:  # noqa: BLE001
-            _log.error("slow_poller_error", error=str(exc))
+            _log.error("slow_poller_error", error=str(exc), exc_info=exc)
 
         # Sleep in small increments so we respond to shutdown quickly
         for _ in range(50):
@@ -104,7 +76,11 @@ def _slow_poller_thread(
             time.sleep(0.1)
 
 
-def _poll_health(state: SharedState, sysroot: Path) -> None:
+def _poll_health(
+    state: SharedState,
+    sysroot: Path,
+    service_units: list[str] | None = None,
+) -> None:
     """Single health poll cycle."""
     from mower_rover.health import (
         read_disk_usage,
@@ -146,7 +122,7 @@ def _poll_health(state: SharedState, sysroot: Path) -> None:
         state.update_wifi(wifi.interface, wifi.signal_dbm, wifi.link_quality)
 
     # Service statuses
-    services = _check_services()
+    services = _check_services(service_units)
 
     # Update state with health and storage
     state.update_health(
@@ -163,21 +139,45 @@ def _poll_health(state: SharedState, sysroot: Path) -> None:
     state.update_services(services)
 
 
-def _check_services() -> dict[str, str]:
-    """Check systemd service statuses for key services."""
+def _unit_display_key(unit: str) -> str:
+    """Derive a display key from a systemd unit name.
+
+    Strips ``mower-`` prefix and ``.service`` suffix, then replaces
+    ``-`` with ``_``.  For example ``mower-vslam-bridge.service`` →
+    ``vslam_bridge``.
+    """
+    name = unit
+    if name.startswith("mower-"):
+        name = name[len("mower-"):]
+    if name.endswith(".service"):
+        name = name[: -len(".service")]
+    return name.replace("-", "_")
+
+
+def _check_services(
+    units: list[str] | None = None,
+) -> dict[str, str]:
+    """Check systemd service statuses for key services.
+
+    Parameters
+    ----------
+    units:
+        List of systemd unit names to check.  When *None*, falls back
+        to :func:`~mower_rover.config.jetson._default_kiosk_service_units`.
+    """
     import subprocess
 
-    services_to_check = [
-        ("slam_node", "mower-slam-node.service"),
-        ("vslam_bridge", "mower-vslam-bridge.service"),
-        ("health_monitor", "mower-health.service"),
-        ("mavproxy", "mavproxy.service"),
-    ]
+    if units is None:
+        from mower_rover.config.jetson import _default_kiosk_service_units
+
+        units = _default_kiosk_service_units()
+
     result: dict[str, str] = {}
-    for key, unit in services_to_check:
+    for unit in units:
+        key = _unit_display_key(unit)
         try:
             proc = subprocess.run(
-                ["systemctl", "--user", "is-active", unit],
+                ["systemctl", "is-active", unit],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -238,15 +238,6 @@ def run_kiosk(
     # Start background reader threads
     threads: list[threading.Thread] = []
 
-    t_vslam = threading.Thread(
-        target=_vslam_reader_thread,
-        args=(state, shutdown),
-        name="kiosk-vslam-reader",
-        daemon=True,
-    )
-    t_vslam.start()
-    threads.append(t_vslam)
-
     t_mav = threading.Thread(
         target=_mavlink_reader_thread,
         args=(state, shutdown, mavlink_endpoint),
@@ -256,9 +247,15 @@ def run_kiosk(
     t_mav.start()
     threads.append(t_mav)
 
+    # Load service units from config
+    from mower_rover.config.jetson import load_jetson_config
+
+    cfg = load_jetson_config()
+    service_units = cfg.kiosk.service_check_units
+
     t_poller = threading.Thread(
         target=_slow_poller_thread,
-        args=(state, shutdown, sysroot),
+        args=(state, shutdown, sysroot, service_units),
         name="kiosk-slow-poller",
         daemon=True,
     )

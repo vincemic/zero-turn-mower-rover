@@ -63,10 +63,13 @@ def mavlink_reader_loop(
             source_system=source_system,
             autoreconnect=True,
         )
-        # Wait for initial heartbeat
-        hb = conn.wait_heartbeat(timeout=10.0)
-        if hb is None:
-            _log.error("telemetry_no_heartbeat", endpoint=endpoint)
+        # Wait for initial heartbeat with unbounded retry
+        while not shutdown.is_set():
+            hb = conn.wait_heartbeat(timeout=10.0)
+            if hb is not None:
+                break
+            _log.warning("telemetry_no_heartbeat_retry", endpoint=endpoint)
+        if shutdown.is_set():
             return
         _log.info("telemetry_connected", target_system=conn.target_system)
 
@@ -85,6 +88,8 @@ def mavlink_reader_loop(
             _handle_gps_raw(state, msg, mtype)
         elif mtype in ("GPS_RTK", "GPS2_RTK"):
             _handle_gps_rtk(state, msg, mtype)
+        elif mtype == "NAMED_VALUE_FLOAT":
+            _handle_named_value_float(state, msg)
         elif mtype == "STATUSTEXT":
             _handle_statustext(state, msg)
 
@@ -150,6 +155,27 @@ def _handle_gps_rtk(state: SharedState, msg: Any, mtype: str) -> None:
         state.update_mav(rtk1_baseline_mm=baseline, rtk1_iar=iar)
     else:
         state.update_mav(rtk2_baseline_mm=baseline, rtk2_iar=iar)
+
+
+_VSLAM_METRIC_NAMES: dict[str, str] = {
+    "VSLAM_HZ": "rate_hz",
+    "VSLAM_CONF": "confidence",
+    "VSLAM_AGE": "age_ms",
+    "VSLAM_COV": "covariance_norm",
+}
+
+
+def _handle_named_value_float(state: SharedState, msg: Any) -> None:
+    """Parse NAMED_VALUE_FLOAT for VSLAM metrics."""
+    name = msg.name
+    # pymavlink may return bytes or str depending on version
+    if isinstance(name, bytes):
+        name = name.rstrip(b"\x00").decode("ascii", errors="replace")
+    else:
+        name = name.rstrip("\x00")
+    key = _VSLAM_METRIC_NAMES.get(name)
+    if key is not None:
+        state.update_vslam(**{key: float(msg.value)})
 
 
 def _handle_statustext(state: SharedState, msg: Any) -> None:

@@ -35,6 +35,7 @@ def _default_kiosk_service_units() -> list[str]:
         "mower-vslam.service",
         "mower-vslam-bridge.service",
         "mower-weston.service",
+        "mower-mavproxy.service",
     ]
 
 

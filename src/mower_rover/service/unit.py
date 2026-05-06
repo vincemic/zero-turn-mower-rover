@@ -492,7 +492,7 @@ def generate_kiosk_unit_file(
         user=user,
         home_dir=home_dir,
         user_level=False,
-        after=f"{WESTON_UNIT_NAME}.service mower-health.service",
+        after=f"{WESTON_UNIT_NAME}.service mower-health.service {MAVPROXY_UNIT_NAME}.service",
         binds_to=f"{WESTON_UNIT_NAME}.service",
         watchdog_sec=30,
         service_type="notify",

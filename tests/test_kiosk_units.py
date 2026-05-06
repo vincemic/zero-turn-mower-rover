@@ -252,11 +252,11 @@ class TestGenerateKioskUnit:
         )
         assert "BindsTo=mower-weston.service" in content
 
-    def test_after_weston_and_health(self) -> None:
+    def test_after_weston_health_and_mavproxy(self) -> None:
         content = generate_kiosk_unit_file(
             mower_jetson_path="/home/vincent/.local/bin/mower-jetson",
         )
-        assert "After=mower-weston.service mower-health.service" in content
+        assert "After=mower-weston.service mower-health.service mower-mavproxy.service" in content
 
     def test_watchdog_sec(self) -> None:
         content = generate_kiosk_unit_file(

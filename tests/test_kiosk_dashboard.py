@@ -121,7 +121,7 @@ class TestDashboardWindow:
         state.update_mav(mode="AUTO", armed=True, groundspeed_ms=2.5, heading_deg=90)
         state.update_mav(gps1_fix=6, gps1_sats=12, gps1_hdop=0.8)
         state.update_wifi("wlan0", -45.0, 85.0)
-        state.update_vslam(x=1.5, y=2.3, confidence=3, reset_counter=0)
+        state.update_vslam(rate_hz=30.0, confidence=3, age_ms=50, covariance_norm=0.01)
         state.update_health(cpu_temp_c=55.0, gpu_temp_c=50.0, power_mode="50W", fan_status="active")
         state.update_storage(nvme_pct=45.0, nvme_free_gb="950.2 GB", root_pct=30.0)
         state.update_services({"slam_node": "active", "vslam_bridge": "active"})
@@ -168,9 +168,9 @@ class TestSharedStateExtensions:
         from mower_rover.kiosk.state import SharedState
 
         state = SharedState()
-        state.update_vslam(x=1.0, y=2.0, confidence=3)
+        state.update_vslam(rate_hz=30.0, confidence=3, age_ms=50)
         snap = state.snapshot()
-        assert snap["vslam"]["x"] == 1.0
+        assert snap["vslam"]["rate_hz"] == 30.0
         assert snap["vslam"]["confidence"] == 3
 
     def test_update_health(self):

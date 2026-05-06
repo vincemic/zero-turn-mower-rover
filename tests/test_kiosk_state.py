@@ -69,7 +69,6 @@ class TestSharedState:
         """Concurrent writers and readers don't corrupt state."""
         state = SharedState()
         errors: list[Exception] = []
-        threading.Event()
 
         def writer() -> None:
             for i in range(200):
@@ -285,3 +284,179 @@ class TestMavlinkReaderLoop:
         # Should return quickly without blocking
         mavlink_reader_loop(state, shutdown, conn=conn)
         # If we get here, the loop exited — pass
+
+    def test_named_value_float_vslam_hz_str(self) -> None:
+        """NAMED_VALUE_FLOAT with str name updates VSLAM rate_hz."""
+        state = SharedState()
+        shutdown = threading.Event()
+
+        messages = [
+            _FakeMsg("NAMED_VALUE_FLOAT", name="VSLAM_HZ\x00\x00", value=30.0),
+        ]
+        call_count = 0
+
+        def fake_recv_match(blocking=True, timeout=0.5):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return messages[0]
+            shutdown.set()
+            return None
+
+        conn = MagicMock()
+        conn.recv_match = fake_recv_match
+
+        mavlink_reader_loop(state, shutdown, conn=conn)
+
+        snap = state.snapshot()
+        assert snap["vslam"]["rate_hz"] == 30.0
+
+    def test_named_value_float_vslam_conf_bytes(self) -> None:
+        """NAMED_VALUE_FLOAT with bytes name updates VSLAM confidence."""
+        state = SharedState()
+        shutdown = threading.Event()
+
+        messages = [
+            _FakeMsg("NAMED_VALUE_FLOAT", name=b"VSLAM_CONF\x00", value=85.0),
+        ]
+        call_count = 0
+
+        def fake_recv_match(blocking=True, timeout=0.5):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return messages[0]
+            shutdown.set()
+            return None
+
+        conn = MagicMock()
+        conn.recv_match = fake_recv_match
+
+        mavlink_reader_loop(state, shutdown, conn=conn)
+
+        snap = state.snapshot()
+        assert snap["vslam"]["confidence"] == 85.0
+
+    def test_named_value_float_all_vslam_metrics(self) -> None:
+        """All four VSLAM_* metrics update the correct SharedState keys."""
+        state = SharedState()
+        shutdown = threading.Event()
+
+        messages = [
+            _FakeMsg("NAMED_VALUE_FLOAT", name="VSLAM_HZ", value=25.0),
+            _FakeMsg("NAMED_VALUE_FLOAT", name="VSLAM_CONF", value=3.0),
+            _FakeMsg("NAMED_VALUE_FLOAT", name=b"VSLAM_AGE\x00\x00\x00", value=120.0),
+            _FakeMsg("NAMED_VALUE_FLOAT", name=b"VSLAM_COV", value=0.05),
+        ]
+        call_count = 0
+
+        def fake_recv_match(blocking=True, timeout=0.5):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= len(messages):
+                return messages[call_count - 1]
+            shutdown.set()
+            return None
+
+        conn = MagicMock()
+        conn.recv_match = fake_recv_match
+
+        mavlink_reader_loop(state, shutdown, conn=conn)
+
+        snap = state.snapshot()
+        assert snap["vslam"]["rate_hz"] == 25.0
+        assert snap["vslam"]["confidence"] == 3.0
+        assert snap["vslam"]["age_ms"] == 120.0
+        assert snap["vslam"]["covariance_norm"] == pytest.approx(0.05)
+
+    def test_named_value_float_unknown_ignored(self) -> None:
+        """NAMED_VALUE_FLOAT with unknown name does not update VSLAM."""
+        state = SharedState()
+        shutdown = threading.Event()
+
+        messages = [
+            _FakeMsg("NAMED_VALUE_FLOAT", name="OTHER_METRIC", value=99.0),
+        ]
+        call_count = 0
+
+        def fake_recv_match(blocking=True, timeout=0.5):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return messages[0]
+            shutdown.set()
+            return None
+
+        conn = MagicMock()
+        conn.recv_match = fake_recv_match
+
+        mavlink_reader_loop(state, shutdown, conn=conn)
+
+        snap = state.snapshot()
+        assert snap["vslam"] == {}
+
+    def test_heartbeat_retry_then_connect(self) -> None:
+        """wait_heartbeat returning None retries until a heartbeat arrives."""
+        import unittest.mock as mock
+
+        state = SharedState()
+        shutdown = threading.Event()
+
+        hb_call_count = 0
+
+        def fake_wait_hb(timeout=10.0):
+            nonlocal hb_call_count
+            hb_call_count += 1
+            if hb_call_count < 3:
+                return None
+            return _FakeMsg("HEARTBEAT")
+
+        recv_count = 0
+
+        def fake_recv(blocking=True, timeout=0.5):
+            nonlocal recv_count
+            recv_count += 1
+            shutdown.set()
+            return None
+
+        fake_conn = MagicMock()
+        fake_conn.wait_heartbeat = fake_wait_hb
+        fake_conn.recv_match = fake_recv
+        fake_conn.target_system = 1
+
+        with mock.patch(
+            "pymavlink.mavutil.mavlink_connection",
+            return_value=fake_conn,
+        ):
+            mavlink_reader_loop(state, shutdown, endpoint="udp:127.0.0.1:14550")
+
+        assert hb_call_count == 3  # retried twice, succeeded on third
+
+    def test_heartbeat_retry_shutdown_during_wait(self) -> None:
+        """Heartbeat retry exits cleanly when shutdown is set during wait."""
+        import unittest.mock as mock
+
+        state = SharedState()
+        shutdown = threading.Event()
+
+        hb_call_count = 0
+
+        def fake_wait_hb(timeout=10.0):
+            nonlocal hb_call_count
+            hb_call_count += 1
+            if hb_call_count >= 2:
+                shutdown.set()
+            return None
+
+        fake_conn = MagicMock()
+        fake_conn.wait_heartbeat = fake_wait_hb
+        fake_conn.target_system = 1
+
+        with mock.patch(
+            "pymavlink.mavutil.mavlink_connection",
+            return_value=fake_conn,
+        ):
+            mavlink_reader_loop(state, shutdown, endpoint="udp:127.0.0.1:14550")
+
+        assert hb_call_count >= 2
+        fake_conn.recv_match.assert_not_called()
