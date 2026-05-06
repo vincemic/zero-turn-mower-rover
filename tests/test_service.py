@@ -440,13 +440,13 @@ class TestGenerateVslamUnitFile:
 
 
 class TestGenerateVslamBridgeUnitFile:
-    def test_binds_to_pixhawk_device(self) -> None:
+    def test_no_binds_to_pixhawk_device(self) -> None:
         content = generate_vslam_bridge_unit_file(
             mower_jetson_path="/usr/bin/mower-jetson",
             user="mower",
             home_dir="/home/mower",
         )
-        assert "BindsTo=dev-pixhawk.device" in content
+        assert "BindsTo=dev-pixhawk.device" not in content
 
     def test_does_not_bind_to_ttyACM0(self) -> None:
         content = generate_vslam_bridge_unit_file(
@@ -456,13 +456,13 @@ class TestGenerateVslamBridgeUnitFile:
         )
         assert "ttyACM0" not in content
 
-    def test_runtime_directory_mower(self) -> None:
+    def test_no_runtime_directory(self) -> None:
         content = generate_vslam_bridge_unit_file(
             mower_jetson_path="/usr/bin/mower-jetson",
             user="mower",
             home_dir="/home/mower",
         )
-        assert "RuntimeDirectory=mower" in content
+        assert "RuntimeDirectory" not in content
 
     def test_exec_start(self) -> None:
         content = generate_vslam_bridge_unit_file(
@@ -472,13 +472,13 @@ class TestGenerateVslamBridgeUnitFile:
         )
         assert "ExecStart=/usr/local/bin/mower-jetson vslam bridge-run" in content
 
-    def test_after_vslam_service(self) -> None:
+    def test_after_vslam_and_mavproxy_service(self) -> None:
         content = generate_vslam_bridge_unit_file(
             mower_jetson_path="/usr/bin/mower-jetson",
             user="mower",
             home_dir="/home/mower",
         )
-        assert "After=network.target mower-vslam.service" in content
+        assert "After=network.target mower-vslam.service mower-mavproxy.service" in content
 
 
 # ---------------------------------------------------------------------------

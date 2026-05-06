@@ -383,10 +383,10 @@ def generate_vslam_bridge_unit_file(
         user=user,
         home_dir=home_dir,
         user_level=user_level,
-        after=f"network.target {VSLAM_UNIT_NAME}.service",
-        binds_to="dev-pixhawk.device",
+        after=f"network.target {VSLAM_UNIT_NAME}.service {MAVPROXY_UNIT_NAME}.service",
+        binds_to=None,
         watchdog_sec=30,
-        runtime_directory="mower",
+        runtime_directory=None,
     )
 
 
