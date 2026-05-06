@@ -35,6 +35,8 @@ dev = [
 jetson = [
     "sdnotify>=0.3",
     "depthai>=3.5.0",
+    "PyGObject>=3.42,<3.50",
+    "pycairo>=1.20",
 ]
 
 [build-system]

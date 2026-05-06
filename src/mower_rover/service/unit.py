@@ -397,6 +397,7 @@ def generate_vslam_bridge_unit_file(
 _WESTON_EXEC_START = (
     "/usr/bin/weston --shell=desktop-shell.so"
     " --drm-device=card0"
+    " --renderer=pixman"
     " --idle-time=0"
     " --log=/var/log/mower-jetson/weston.log"
     " --continue-without-input"
@@ -411,7 +412,6 @@ StartLimitBurst=30
 
 [Service]
 Type=simple
-ExecCondition=/usr/local/bin/gpu-egl-ready
 ExecStartPre=/bin/mkdir -p /var/log/mower-jetson
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do [ -e /dev/dri/card0 ] && exit 0; sleep 1; done; echo "DRM device not found"; exit 1'
 ExecStart={weston_exec_start}

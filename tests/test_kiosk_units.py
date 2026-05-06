@@ -124,6 +124,7 @@ class TestGenerateWestonUnit:
         assert (
             "ExecStart=/usr/bin/weston --shell=desktop-shell.so"
             " --drm-device=card0"
+            " --renderer=pixman"
             " --idle-time=0"
             " --log=/var/log/mower-jetson/weston.log"
             " --continue-without-input"
@@ -149,9 +150,9 @@ class TestGenerateWestonUnit:
         content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
         assert "nvidia-smi" not in content
 
-    def test_exec_condition_gpu_probe(self) -> None:
+    def test_no_exec_condition(self) -> None:
         content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
-        assert "ExecCondition=/usr/local/bin/gpu-egl-ready" in content
+        assert "ExecCondition" not in content
 
     def test_user_field(self) -> None:
         content = generate_weston_unit_file(user="testuser", home_dir="/home/testuser")

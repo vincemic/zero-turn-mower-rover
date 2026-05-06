@@ -21,7 +21,7 @@ harden_headless() {
     fi
 
     if systemctl is-enabled gdm3 &>/dev/null; then
-        systemctl disable gdm3
+        systemctl disable --now gdm3
         STATUS[gdm3]="applied"
     else
         STATUS[gdm3]="already"
@@ -599,20 +599,38 @@ harden_weston_config() {
         apt-get install -y nvidia-l4t-weston
     fi
 
+    # GTK4/PyGObject build deps for kiosk app
+    apt-get install -y --no-install-recommends \
+        libgirepository1.0-dev libcairo2-dev gir1.2-gtk-4.0 2>/dev/null || true
+
+    # Ensure nvidia-drm is loaded at boot with modeset (GDM used to trigger this)
+    if [[ ! -f /etc/modules-load.d/nvidia-drm.conf ]] || \
+       ! grep -q 'nvidia-drm' /etc/modules-load.d/nvidia-drm.conf; then
+        echo 'nvidia-drm' > /etc/modules-load.d/nvidia-drm.conf
+    fi
+    # modeset=1 is required for DRM connectors to appear on nvidia GPU
+    local modprobe_conf="/etc/modprobe.d/nvidia-drm.conf"
+    local modprobe_desired="options nvidia-drm modeset=1 fbdev=1"
+    if [[ ! -f "$modprobe_conf" ]] || ! grep -qF "$modprobe_desired" "$modprobe_conf"; then
+        echo "$modprobe_desired" > "$modprobe_conf"
+    fi
+
     local conf_dir="/etc/xdg/weston"
     local conf_file="$conf_dir/weston.ini"
     local desired
     desired=$(cat <<'WESTONINI'
 [core]
-shell=kiosk-shell.so
+shell=desktop-shell.so
 idle-time=0
 
 [output]
-name=HDMI-A-1
+name=DP-1
 mode=preferred
 
 [shell]
 background-color=0xFF000000
+panel-position=none
+locking=false
 WESTONINI
 )
 

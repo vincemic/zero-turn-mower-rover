@@ -270,11 +270,10 @@ def run_kiosk(
     # Create the GTK application
     app = KioskApp(state)
 
-    # sdnotify READY=1 after window is realized — hook into activate
-    original_activate = app.do_activate
-
-    def _activate_with_notify() -> None:
-        original_activate()
+    # sdnotify READY=1 after window is realized — hook into activate signal.
+    # NOTE: must use connect() not instance monkey-patch — GObject dispatches
+    # signals through the class vtable, not instance attributes.
+    def _on_activate(_app: KioskApp) -> None:
         _notifier.notify("READY=1")  # type: ignore[attr-defined]
         _log.info("kiosk_ready")
 
@@ -287,7 +286,7 @@ def run_kiosk(
 
         GLib.timeout_add_seconds(15, _watchdog_tick)
 
-    app.do_activate = _activate_with_notify  # type: ignore[method-assign]
+    app.connect("activate", _on_activate)
 
     # Run GTK main loop (blocks until app quits)
     try:
