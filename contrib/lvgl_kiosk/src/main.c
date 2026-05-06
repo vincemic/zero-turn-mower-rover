@@ -141,9 +141,10 @@ int main(void)
     fprintf(stderr, "kiosk: renderer started, waiting for data on %s\n",
             KIOSK_SOCKET_PATH);
 
-    /* Main event loop */
+    /* Main event loop — MUST use lv_wayland_timer_handler() instead of
+     * lv_timer_handler() so that Wayland events are dispatched. */
     while (lv_wayland_window_is_open(disp) && !g_shutdown) {
-        uint32_t ms = lv_timer_handler();
+        uint32_t ms = lv_wayland_timer_handler();
         lv_delay_ms(ms);
     }
 

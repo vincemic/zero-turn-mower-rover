@@ -29,7 +29,8 @@ kiosk_app = typer.Typer(
 # Service unit names managed by the kiosk subsystem
 KIOSK_UNITS = [
     "mower-weston.service",
-    "mower-kiosk.service",
+    "mower-kiosk-data.service",
+    "mower-kiosk-renderer.service",
     "mower-mavproxy.service",
 ]
 
@@ -43,7 +44,7 @@ def kiosk_run_command(
         None, "--endpoint", help="MAVLink endpoint override (e.g. udp:127.0.0.1:14551)."
     ),
 ) -> None:
-    """Start the kiosk GTK4 operational display (foreground)."""
+    """Start the kiosk data service (foreground, publishes telemetry to socket)."""
     from mower_rover.kiosk.app import run_kiosk
 
     cfg = load_jetson_config(config)

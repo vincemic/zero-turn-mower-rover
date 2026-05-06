@@ -41,7 +41,7 @@ StartLimitBurst=5
 {binds_to}{requires}
 [Service]
 Type={service_type}
-ExecStart={exec_start}
+{exec_start_pre}ExecStart={exec_start}
 Environment=MOWER_CORRELATION_ID=daemon
 {extra_environment}User={user}
 WorkingDirectory={home_dir}
@@ -62,7 +62,7 @@ StartLimitBurst=5
 {binds_to}{requires}
 [Service]
 Type={service_type}
-ExecStart={exec_start}
+{exec_start_pre}ExecStart={exec_start}
 Environment=MOWER_CORRELATION_ID=daemon
 {extra_environment}WorkingDirectory={home_dir}
 WatchdogSec={watchdog_sec}
@@ -90,6 +90,7 @@ def generate_service_unit(
     service_type: str = "notify",
     extra_environment: dict[str, str] | None = None,
     restart_sec: int = 5,
+    exec_start_pre: list[str] | None = None,
 ) -> str:
     """Return a systemd unit file from the generic template.
 
@@ -108,6 +109,11 @@ def generate_service_unit(
         extra_env_lines = "".join(
             f"Environment={k}={v}\n" for k, v in extra_environment.items()
         )
+    exec_start_pre_lines = ""
+    if exec_start_pre:
+        exec_start_pre_lines = "".join(
+            f"ExecStartPre={cmd}\n" for cmd in exec_start_pre
+        )
     template = _GENERIC_USER_TEMPLATE if user_level else _GENERIC_SYSTEM_TEMPLATE
     return template.format(
         description=description,
@@ -123,6 +129,7 @@ def generate_service_unit(
         service_type=service_type,
         extra_environment=extra_env_lines,
         restart_sec=restart_sec,
+        exec_start_pre=exec_start_pre_lines,
     )
 
 
@@ -558,6 +565,7 @@ def generate_kiosk_renderer_unit_file(
         home_dir=home_dir,
         user_level=False,
         after=f"{WESTON_UNIT_NAME}.service",
+        binds_to=f"{WESTON_UNIT_NAME}.service",
         watchdog_sec=30,
         service_type="notify",
         extra_environment={
@@ -565,6 +573,9 @@ def generate_kiosk_renderer_unit_file(
             "WAYLAND_DISPLAY": "wayland-0",
         },
         restart_sec=2,
+        exec_start_pre=[
+            "/bin/sh -c 'for i in $(seq 1 30); do [ -e /run/user/1000/wayland-0 ] && exit 0; sleep 0.5; done; echo \"Wayland socket not found\"; exit 1'",
+        ],
     )
 
 

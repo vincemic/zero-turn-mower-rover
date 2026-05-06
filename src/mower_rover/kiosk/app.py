@@ -285,6 +285,9 @@ def run_kiosk(
 
         client: socket.socket | None = None
         while not shutdown.is_set():
+            # Watchdog — must fire every iteration regardless of client state
+            _notifier.notify("WATCHDOG=1")  # type: ignore[attr-defined]
+
             # Accept new connections
             if client is None:
                 try:
@@ -307,9 +310,6 @@ def run_kiosk(
                     pass
                 client = None
                 continue
-
-            # Watchdog
-            _notifier.notify("WATCHDOG=1")  # type: ignore[attr-defined]
 
             # Sleep 1s in 100ms increments for responsive shutdown
             for _ in range(10):
