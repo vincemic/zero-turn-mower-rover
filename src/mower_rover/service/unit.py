@@ -36,7 +36,7 @@ Description={description}
 After={after}
 StartLimitIntervalSec=300
 StartLimitBurst=5
-{binds_to}
+{binds_to}{requires}
 [Service]
 Type={service_type}
 ExecStart={exec_start}
@@ -57,7 +57,7 @@ Description={description}
 After={after}
 StartLimitIntervalSec=300
 StartLimitBurst=5
-{binds_to}
+{binds_to}{requires}
 [Service]
 Type={service_type}
 ExecStart={exec_start}
@@ -80,6 +80,7 @@ def generate_service_unit(
     home_dir: str,
     user_level: bool = True,
     after: str = "network.target",
+    requires: str | None = None,
     binds_to: str | None = None,
     watchdog_sec: int = 30,
     timeout_start_sec: int | None = None,
@@ -92,6 +93,7 @@ def generate_service_unit(
     This is the building block for all mower service units.
     """
     binds_to_line = f"BindsTo={binds_to}\n" if binds_to else ""
+    requires_line = f"Requires={requires}\n" if requires else ""
     runtime_dir_line = (
         f"RuntimeDirectory={runtime_directory}\n" if runtime_directory else ""
     )
@@ -110,6 +112,7 @@ def generate_service_unit(
         user=user,
         home_dir=home_dir,
         after=after,
+        requires=requires_line,
         binds_to=binds_to_line,
         watchdog_sec=watchdog_sec,
         timeout_start_sec=timeout_line,
@@ -384,8 +387,10 @@ def generate_vslam_bridge_unit_file(
         home_dir=home_dir,
         user_level=user_level,
         after=f"network.target {VSLAM_UNIT_NAME}.service {MAVPROXY_UNIT_NAME}.service",
+        requires=f"{MAVPROXY_UNIT_NAME}.service",
         binds_to=None,
         watchdog_sec=30,
+        timeout_start_sec=120,
         runtime_directory=None,
     )
 

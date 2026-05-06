@@ -480,6 +480,22 @@ class TestGenerateVslamBridgeUnitFile:
         )
         assert "After=network.target mower-vslam.service mower-mavproxy.service" in content
 
+    def test_timeout_start_sec(self) -> None:
+        content = generate_vslam_bridge_unit_file(
+            mower_jetson_path="/usr/bin/mower-jetson",
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "TimeoutStartSec=120" in content
+
+    def test_requires_mavproxy_service(self) -> None:
+        content = generate_vslam_bridge_unit_file(
+            mower_jetson_path="/usr/bin/mower-jetson",
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "Requires=mower-mavproxy.service" in content
+
 
 # ---------------------------------------------------------------------------
 # install_vslam_service

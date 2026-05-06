@@ -800,12 +800,17 @@ class TestRunVslamServices:
             _ssh_ok(),  # cleanup-user-units
             _ssh_ok(),  # vslam install
             _ssh_ok(),  # bridge-install
-            _ssh_ok(),  # systemctl start
+            _ssh_ok(),  # reset-failed
+            _ssh_ok(),  # systemctl start --no-block
+            _ssh_ok(stdout="active\nactive"),  # systemctl is-active (poll)
         ]
 
-        _run_vslam_services(mock_client, bctx)
+        with patch("mower_rover.cli.bringup.time") as mock_time:
+            mock_time.time.side_effect = [0, 1]  # deadline=120, first check < deadline
+            mock_time.sleep = MagicMock()
+            _run_vslam_services(mock_client, bctx)
 
-        assert mock_client.run.call_count == 4
+        assert mock_client.run.call_count == 6
         # cleanup runs first, non-elevated, no sudo
         cleanup_cmd = " ".join(mock_client.run.call_args_list[0][0][0])
         assert "cleanup-user-units" in cleanup_cmd
@@ -821,9 +826,13 @@ class TestRunVslamServices:
         assert "bridge-install" in bridge_cmd
         assert "sudo" in bridge_cmd
         assert "--target-user" in bridge_cmd
-        # systemctl start: sudo, no --user
-        start_cmd = " ".join(mock_client.run.call_args_list[3][0][0])
-        assert "sudo systemctl start" in start_cmd
+        # reset-failed: sudo systemctl reset-failed
+        reset_cmd = " ".join(mock_client.run.call_args_list[3][0][0])
+        assert "reset-failed" in reset_cmd
+        assert "sudo" in reset_cmd
+        # systemctl start --no-block: sudo, no --user
+        start_cmd = " ".join(mock_client.run.call_args_list[4][0][0])
+        assert "sudo systemctl start --no-block" in start_cmd
         assert "mower-vslam" in start_cmd
         assert "--user" not in start_cmd
 
@@ -1173,9 +1182,9 @@ class TestStepOrdering:
             "vslam-config",
             "service",
             "vslam-db-check",
+            "install-mavproxy",
             "vslam-services",
             "pixhawk-sync",
-            "install-mavproxy",
             "kiosk-services",
             "kiosk-probe",
             "final-verify",

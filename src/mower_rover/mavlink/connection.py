@@ -8,6 +8,7 @@ before yielding. Designed to be the single place every CLI command opens a link.
 from __future__ import annotations
 
 import contextlib
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -36,7 +37,11 @@ class ConnectionConfig:
 
 
 @contextmanager
-def open_link(config: ConnectionConfig) -> Iterator[Any]:
+def open_link(
+    config: ConnectionConfig,
+    *,
+    shutdown_event: threading.Event | None = None,
+) -> Iterator[Any]:
     """Open a MAVLink link, wait for a heartbeat, yield the connection, then close.
 
     Raises `ConnectionError` if no heartbeat is received after all retries.
@@ -49,6 +54,8 @@ def open_link(config: ConnectionConfig) -> Iterator[Any]:
     last_error: Exception | None = None
 
     for attempt in range(1, config.retry_attempts + 1):
+        if shutdown_event is not None and shutdown_event.is_set():
+            raise ConnectionError("shutdown requested before connection attempt")
         log.info("connect_attempt", attempt=attempt, of=config.retry_attempts)
         try:
             conn = mavutil.mavlink_connection(
@@ -78,7 +85,11 @@ def open_link(config: ConnectionConfig) -> Iterator[Any]:
             last_error = exc
             log.warning("connect_failed", attempt=attempt, error=str(exc))
             if attempt < config.retry_attempts:
-                time.sleep(config.retry_backoff_s * attempt)
+                if shutdown_event is not None:
+                    if shutdown_event.wait(timeout=config.retry_backoff_s * attempt):
+                        raise ConnectionError("shutdown requested during connection retry")
+                else:
+                    time.sleep(config.retry_backoff_s * attempt)
 
     raise ConnectionError(
         f"Failed to connect to {config.endpoint} after "

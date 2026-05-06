@@ -20,9 +20,9 @@ Runs on the **laptop** (Windows or Linux). Walks through 23 steps:
 16. vslam-config       — Default VSLAM configuration
 17. service            — mower-health.service install + start
 18. vslam-db-check     — RTAB-Map DB integrity check + quarantine
-19. vslam-services     — VSLAM + bridge systemd services
-20. pixhawk-sync       — Pixhawk param + Lua sync service
-21. install-mavproxy   — MAVProxy telemetry forwarder
+19. install-mavproxy   — MAVProxy telemetry forwarder
+20. vslam-services     — VSLAM + bridge systemd services
+21. pixhawk-sync       — Pixhawk param + Lua sync service
 22. kiosk-services     — Weston + kiosk dashboard services
 23. kiosk-probe        — Kiosk probe verification
 24. final-verify       — Final reboot + full probe verification
@@ -80,9 +80,9 @@ STEP_NAMES = (
     "vslam-config",
     "service",
     "vslam-db-check",
+    "install-mavproxy",
     "vslam-services",
     "pixhawk-sync",
-    "install-mavproxy",
     "kiosk-services",
     "kiosk-probe",
     "final-verify",
@@ -1476,22 +1476,58 @@ def _run_vslam_services(client: JetsonClient, bctx: BringupContext) -> None:
             bctx.console.print(result.stderr, style="dim", highlight=False)
         raise typer.Exit(code=3)
 
-    bctx.console.print("  Starting VSLAM services…")
+    bctx.console.print("  Resetting failed state…")
+    with contextlib.suppress(SshError):
+        client.run(
+            ["sudo systemctl reset-failed mower-vslam.service mower-vslam-bridge.service"],
+            timeout=10,
+        )
+
+    bctx.console.print("  Starting VSLAM services (non-blocking)…")
     try:
-        result = client.run(
-            ["sudo systemctl start mower-vslam.service mower-vslam-bridge.service"],
-            timeout=60,
+        client.run(
+            ["sudo systemctl start --no-block mower-vslam.service mower-vslam-bridge.service"],
+            timeout=15,
         )
     except SshError as exc:
         bctx.console.print(f"  [red]Service start failed:[/red] {exc}")
         raise typer.Exit(code=3) from exc
-    if not result.ok:
-        bctx.console.print(
-            f"  [red]Service start exited {result.returncode}:[/red]"
-        )
-        if result.stderr:
-            bctx.console.print(result.stderr, style="dim", highlight=False)
-        raise typer.Exit(code=3)
+
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        time.sleep(5)
+        try:
+            result = client.run(
+                ["systemctl is-active mower-vslam.service mower-vslam-bridge.service"],
+                timeout=10,
+            )
+        except SshError as exc:
+            bctx.console.print(f"  [yellow]Poll SSH error:[/yellow] {exc}")
+            continue
+
+        lines = (result.stdout or "").strip().splitlines()
+        statuses = [line.strip() for line in lines]
+
+        if all(s == "active" for s in statuses):
+            bctx.console.print("  [green]Both VSLAM services active.[/green]")
+            return
+
+        if any(s == "failed" for s in statuses):
+            diag = client.run(
+                ["sudo systemctl status mower-vslam-bridge.service --no-pager -l"],
+                timeout=10,
+            )
+            bctx.console.print("  [red]Service failed:[/red]")
+            if diag.stdout:
+                bctx.console.print(diag.stdout[:500], style="dim", highlight=False)
+            raise typer.Exit(code=3)
+
+        vslam_s = statuses[0] if len(statuses) > 0 else "?"
+        bridge_s = statuses[1] if len(statuses) > 1 else "?"
+        bctx.console.print(f"  Waiting… (vslam={vslam_s}, bridge={bridge_s})")
+
+    bctx.console.print("  [red]VSLAM services did not become active within 120s.[/red]")
+    raise typer.Exit(code=3)
 
 
 # ---------------------------------------------------------------------------
@@ -2131,6 +2167,13 @@ BRINGUP_STEPS: list[BringupStep] = [
         execute=lambda c, b: _run_db_check(c, b),
     ),
     BringupStep(
+        name="install-mavproxy",
+        description="MAVProxy telemetry forwarder",
+        check=lambda c: _mavproxy_active(c),
+        execute=lambda c, b: _run_install_mavproxy(c, b),
+        needs_confirm=True,
+    ),
+    BringupStep(
         name="vslam-services",
         description="VSLAM + bridge systemd services",
         check=lambda c: _vslam_services_active(c),
@@ -2142,13 +2185,6 @@ BRINGUP_STEPS: list[BringupStep] = [
         description="Pixhawk param + Lua sync service",
         check=lambda c: _pixhawk_sync_done(c),
         execute=lambda c, b: _run_pixhawk_sync(c, b),
-        needs_confirm=True,
-    ),
-    BringupStep(
-        name="install-mavproxy",
-        description="MAVProxy telemetry forwarder",
-        check=lambda c: _mavproxy_active(c),
-        execute=lambda c, b: _run_install_mavproxy(c, b),
         needs_confirm=True,
     ),
     BringupStep(

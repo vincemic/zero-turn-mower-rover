@@ -202,7 +202,7 @@ def run_bridge(
 
     reader = PoseReader(cfg.socket_path)
 
-    with open_link(conn_cfg) as conn:
+    with open_link(conn_cfg, shutdown_event=shutdown) as conn:
         # Deploy AHRS source-switching Lua script before entering pose loop
         check_and_deploy_lua(conn)
 
