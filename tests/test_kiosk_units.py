@@ -162,6 +162,18 @@ class TestGenerateWestonUnit:
         content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
         assert "WantedBy=multi-user.target" in content
 
+    def test_after_seatd(self) -> None:
+        content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
+        assert "After=seatd.service systemd-modules-load.service" in content
+
+    def test_requires_seatd(self) -> None:
+        content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
+        assert "Requires=seatd.service" in content
+
+    def test_no_after_multi_user_target(self) -> None:
+        content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
+        assert "After=multi-user.target" not in content
+
 
 # ---------------------------------------------------------------------------
 # generate_mavproxy_unit_file

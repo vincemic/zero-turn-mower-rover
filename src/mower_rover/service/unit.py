@@ -406,7 +406,8 @@ _WESTON_EXEC_START = (
 _WESTON_UNIT_TEMPLATE = """\
 [Unit]
 Description=Weston kiosk compositor for mower display
-After=multi-user.target systemd-modules-load.service
+After=seatd.service systemd-modules-load.service
+Requires=seatd.service
 StartLimitIntervalSec=120
 StartLimitBurst=30
 
