@@ -7,7 +7,7 @@
 #ifndef WIDGETS_H
 #define WIDGETS_H
 
-#include "lvgl/lvgl.h"
+#include "lvgl.h"
 
 #ifdef __cplusplus
 extern "C" {

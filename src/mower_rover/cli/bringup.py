@@ -529,6 +529,8 @@ _BUILD_APT_PACKAGES = (
     "libgirepository1.0-dev",
     "libcairo2-dev",
     "gir1.2-gtk-4.0",
+    "libwayland-dev",
+    "libxkbcommon-dev",
 )
 
 

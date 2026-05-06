@@ -15,7 +15,7 @@
 
 #include <systemd/sd-daemon.h>
 
-#include "lvgl/lvgl.h"
+#include "lvgl.h"
 #include "socket_client.h"
 #include "json_parser.h"
 #include "theme.h"
@@ -150,7 +150,7 @@ int main(void)
     /* Graceful shutdown */
     sd_notify(0, "STOPPING=1");
     socket_client_close();
-    lv_wayland_window_delete(disp);
+    lv_wayland_window_close(disp);
     lv_deinit();
 
     fprintf(stderr, "kiosk: clean exit\n");

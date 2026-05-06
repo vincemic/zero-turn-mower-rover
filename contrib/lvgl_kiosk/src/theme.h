@@ -6,7 +6,7 @@
 #ifndef THEME_H
 #define THEME_H
 
-#include "lvgl/lvgl.h"
+#include "lvgl.h"
 
 #ifdef __cplusplus
 extern "C" {
