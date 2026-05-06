@@ -498,6 +498,7 @@ def generate_kiosk_unit_file(
         extra_environment={
             "XDG_RUNTIME_DIR": "/run/user/1000",
             "WAYLAND_DISPLAY": "wayland-0",
+            "GSK_RENDERER": "cairo",
         },
     )
 

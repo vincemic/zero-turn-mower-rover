@@ -13,7 +13,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from mower_rover.kiosk.state import SharedState  # noqa: E402
 
@@ -63,6 +63,8 @@ class StatusCard(Gtk.Frame):
             val.add_css_class("metric-value")
             val.set_halign(Gtk.Align.END)
             val.set_hexpand(True)
+            val.set_ellipsize(Pango.EllipsizeMode.END)
+            val.set_max_width_chars(10)
             row.append(val)
             self._metric_values.append(val)
 
@@ -249,7 +251,10 @@ class KioskApp(Gtk.Application):
     """GTK4 Application that creates the DashboardWindow and loads CSS."""
 
     def __init__(self, state: SharedState) -> None:
-        super().__init__(application_id="org.mower.kiosk")
+        super().__init__(
+            application_id="org.mower.kiosk",
+            flags=Gio.ApplicationFlags.NON_UNIQUE,
+        )
         self._state = state
 
     def do_activate(self) -> None:
