@@ -37,6 +37,8 @@ jetson = [
     "depthai>=3.5.0",
     "PyGObject>=3.42,<3.50",
     "pycairo>=1.20",
+    "MAVProxy>=1.8",
+    "future>=0.18",
 ]
 
 [build-system]
