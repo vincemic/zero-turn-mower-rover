@@ -23,7 +23,9 @@ UNIT_NAME = "mower-health"
 VSLAM_UNIT_NAME = "mower-vslam"
 VSLAM_BRIDGE_UNIT_NAME = "mower-vslam-bridge"
 WESTON_UNIT_NAME = "mower-weston"
-KIOSK_UNIT_NAME = "mower-kiosk"
+KIOSK_UNIT_NAME = "mower-kiosk"  # Legacy name — kept for cleanup of old unit
+KIOSK_DATA_UNIT_NAME = "mower-kiosk-data"
+KIOSK_RENDERER_UNIT_NAME = "mower-kiosk-renderer"
 MAVPROXY_UNIT_NAME = "mower-mavproxy"
 
 # ---------------------------------------------------------------------------
@@ -45,7 +47,7 @@ Environment=MOWER_CORRELATION_ID=daemon
 WorkingDirectory={home_dir}
 WatchdogSec={watchdog_sec}
 {timeout_start_sec}{runtime_directory}Restart=on-failure
-RestartSec=5
+RestartSec={restart_sec}
 
 [Install]
 WantedBy=multi-user.target
@@ -65,7 +67,7 @@ Environment=MOWER_CORRELATION_ID=daemon
 {extra_environment}WorkingDirectory={home_dir}
 WatchdogSec={watchdog_sec}
 {timeout_start_sec}{runtime_directory}Restart=on-failure
-RestartSec=5
+RestartSec={restart_sec}
 
 [Install]
 WantedBy=default.target
@@ -87,6 +89,7 @@ def generate_service_unit(
     runtime_directory: str | None = None,
     service_type: str = "notify",
     extra_environment: dict[str, str] | None = None,
+    restart_sec: int = 5,
 ) -> str:
     """Return a systemd unit file from the generic template.
 
@@ -119,6 +122,7 @@ def generate_service_unit(
         runtime_directory=runtime_dir_line,
         service_type=service_type,
         extra_environment=extra_env_lines,
+        restart_sec=restart_sec,
     )
 
 
@@ -489,7 +493,10 @@ def generate_kiosk_unit_file(
     user: str = "vincent",
     home_dir: str = "/home/vincent",
 ) -> str:
-    """Return the content of a systemd unit file for the mower-kiosk service."""
+    """Return the content of a systemd unit file for the mower-kiosk service.
+
+    .. deprecated:: Use :func:`generate_kiosk_data_unit_file` instead.
+    """
     exec_start = f"{mower_jetson_path} kiosk run"
     return generate_service_unit(
         description="Mower Rover kiosk operational display",
@@ -506,6 +513,58 @@ def generate_kiosk_unit_file(
             "WAYLAND_DISPLAY": "wayland-0",
             "GSK_RENDERER": "cairo",
         },
+    )
+
+
+def generate_kiosk_data_unit_file(
+    *,
+    mower_jetson_path: str,
+    user: str = "vincent",
+    home_dir: str = "/home/vincent",
+) -> str:
+    """Return the content of a systemd unit file for the mower-kiosk-data service.
+
+    The data service runs the Python kiosk daemon that publishes telemetry
+    to a Unix socket in ``/run/mower/``.  It no longer renders GTK4 UI.
+    """
+    exec_start = f"{mower_jetson_path} kiosk run"
+    return generate_service_unit(
+        description="Mower Kiosk Data Service",
+        exec_start=exec_start,
+        user=user,
+        home_dir=home_dir,
+        user_level=False,
+        after=f"{WESTON_UNIT_NAME}.service",
+        watchdog_sec=30,
+        service_type="notify",
+        runtime_directory="mower",
+    )
+
+
+def generate_kiosk_renderer_unit_file(
+    *,
+    user: str = "vincent",
+    home_dir: str = "/home/vincent",
+) -> str:
+    """Return the content of a systemd unit file for the mower-kiosk-renderer service.
+
+    The renderer is a native C/LVGL binary that reads telemetry from the
+    Unix socket and renders to the Wayland compositor.
+    """
+    return generate_service_unit(
+        description="Mower Kiosk LVGL Renderer",
+        exec_start="/usr/local/bin/mower-kiosk-renderer",
+        user=user,
+        home_dir=home_dir,
+        user_level=False,
+        after=f"{WESTON_UNIT_NAME}.service",
+        watchdog_sec=30,
+        service_type="notify",
+        extra_environment={
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+            "WAYLAND_DISPLAY": "wayland-0",
+        },
+        restart_sec=2,
     )
 
 

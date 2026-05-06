@@ -1,6 +1,6 @@
 """`mower jetson bringup` — automated end-to-end Jetson provisioning.
 
-Runs on the **laptop** (Windows or Linux). Walks through 23 steps:
+Runs on the **laptop** (Windows or Linux). Walks through 25 steps:
 
  1. clear-host-key     — Remove stale SSH host key
  2. check-ssh          — SSH connectivity gate
@@ -12,20 +12,21 @@ Runs on the **laptop** (Windows or Linux). Walks through 23 steps:
  8. build-rtabmap      — Build RTAB-Map from source
  9. build-depthai      — Build depthai-core from source
 10. build-slam-node    — Build RTAB-Map SLAM node binary
-11. archive-binaries   — Archive C++ build outputs
-12. pixhawk-udev       — Pixhawk udev rules + runtime dirs
-13. install-uv         — uv + Python 3.11
-14. install-cli        — mower-jetson CLI wheel deploy
-15. verify             — Remote probe verification
-16. vslam-config       — Default VSLAM configuration
-17. service            — mower-health.service install + start
-18. vslam-db-check     — RTAB-Map DB integrity check + quarantine
-19. install-mavproxy   — MAVProxy telemetry forwarder
-20. vslam-services     — VSLAM + bridge systemd services
-21. pixhawk-sync       — Pixhawk param + Lua sync service
-22. kiosk-services     — Weston + kiosk dashboard services
-23. kiosk-probe        — Kiosk probe verification
-24. final-verify       — Final reboot + full probe verification
+11. build-kiosk-renderer — Build LVGL kiosk renderer binary
+12. archive-binaries   — Archive C++ build outputs
+13. pixhawk-udev       — Pixhawk udev rules + runtime dirs
+14. install-uv         — uv + Python 3.11
+15. install-cli        — mower-jetson CLI wheel deploy
+16. verify             — Remote probe verification
+17. vslam-config       — Default VSLAM configuration
+18. service            — mower-health.service install + start
+19. vslam-db-check     — RTAB-Map DB integrity check + quarantine
+20. install-mavproxy   — MAVProxy telemetry forwarder
+21. vslam-services     — VSLAM + bridge systemd services
+22. pixhawk-sync       — Pixhawk param + Lua sync service
+23. kiosk-services     — Weston + kiosk dashboard services
+24. kiosk-probe        — Kiosk probe verification
+25. final-verify       — Final reboot + full probe verification
 """
 
 from __future__ import annotations
@@ -49,12 +50,16 @@ from rich.table import Table
 
 from mower_rover.logging_setup.setup import get_logger
 from mower_rover.service.unit import (
+    KIOSK_DATA_UNIT_NAME,
+    KIOSK_RENDERER_UNIT_NAME,
     KIOSK_UNIT_NAME,
     MAVPROXY_UNIT_NAME,
     UNIT_NAME,
     VSLAM_BRIDGE_UNIT_NAME,
     VSLAM_UNIT_NAME,
     WESTON_UNIT_NAME,
+    generate_kiosk_data_unit_file,
+    generate_kiosk_renderer_unit_file,
     generate_kiosk_unit_file,
     generate_mavproxy_unit_file,
     generate_weston_unit_file,
@@ -72,6 +77,7 @@ STEP_NAMES = (
     "build-rtabmap",
     "build-depthai",
     "build-slam-node",
+    "build-kiosk-renderer",
     "archive-binaries",
     "pixhawk-udev",
     "install-uv",
@@ -108,7 +114,9 @@ _DEFERRED_CHECKS: frozenset[str] = frozenset({
     "oakd_usb_autosuspend", # kernel param — set by jetson-harden.sh
     "oakd_usbfs_memory",    # kernel param — set by jetson-harden.sh
     "kiosk_weston_active",  # installed by kiosk-services step
-    "kiosk_active",         # installed by kiosk-services step
+    "kiosk_data_active",    # installed by kiosk-services step
+    "kiosk_renderer_active",  # installed by kiosk-services step
+    "kiosk_active",         # legacy name — installed by kiosk-services step
     "mavproxy_active",      # installed by install-mavproxy step
 })
 
@@ -806,6 +814,80 @@ printf '{{"component":"slam_node","version":"{SLAM_NODE_VERSION}","built":"%s"}}
 
 
 # ---------------------------------------------------------------------------
+# Step: build-kiosk-renderer
+# ---------------------------------------------------------------------------
+
+KIOSK_RENDERER_VERSION = "1.0.0"
+
+
+def _build_kiosk_renderer_check(client: JetsonClient) -> bool:
+    """Check if the LVGL kiosk renderer binary is installed."""
+    try:
+        r = client.run(
+            ["test", "-f", "/usr/local/bin/mower-kiosk-renderer"],
+            timeout=10,
+        )
+        return r.ok
+    except SshError:
+        return False
+
+
+def _run_build_kiosk_renderer(client: JetsonClient, bctx: BringupContext) -> None:
+    """Build and install the LVGL kiosk renderer binary on the Jetson."""
+    bctx.console.print("  Building LVGL kiosk renderer…")
+
+    contrib_dir = bctx.project_root / "contrib" / "lvgl_kiosk"
+    if not contrib_dir.is_dir():
+        bctx.console.print(
+            f"  [red]contrib/lvgl_kiosk not found:[/red] {contrib_dir}"
+        )
+        raise typer.Exit(code=3)
+
+    # Push the source tree
+    bctx.console.print("  Pushing contrib/lvgl_kiosk…")
+    with contextlib.suppress(SshError):
+        client.run(["rm", "-rf", "/tmp/lvgl_kiosk"], timeout=10)
+    with contextlib.suppress(SshError):
+        client.run(["mkdir", "-p", "/tmp/lvgl_kiosk"], timeout=10)
+
+    for f in contrib_dir.rglob("*"):
+        if f.is_file():
+            rel = f.relative_to(contrib_dir)
+            remote = f"/tmp/lvgl_kiosk/{rel.as_posix()}"
+            remote_parent = str(Path(remote).parent).replace("\\", "/")
+            with contextlib.suppress(SshError):
+                client.run([f"mkdir -p {remote_parent}"], timeout=10)
+            try:
+                client.push(f, remote)
+            except SshError as exc:
+                bctx.console.print(f"  [red]Push failed ({rel}):[/red] {exc}")
+                raise typer.Exit(code=3) from exc
+
+    build_script = f"""\
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd /tmp/lvgl_kiosk
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build -j$(nproc)
+sudo cmake --install build
+
+mkdir -p {VERSION_MARKER_DIR}
+printf '{{"component":"kiosk_renderer","version":"{KIOSK_RENDERER_VERSION}","built":"%s"}}\\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    | tee {VERSION_MARKER_DIR}/kiosk_renderer.json
+"""
+
+    _push_and_run_build(
+        client, bctx, "mower-build-kiosk-renderer.sh", build_script, timeout=300,
+    )
+
+    # Clean up
+    with contextlib.suppress(SshError):
+        client.run(["rm", "-rf", "/tmp/lvgl_kiosk"], timeout=10)
+
+
+# ---------------------------------------------------------------------------
 # Step: archive-binaries
 # ---------------------------------------------------------------------------
 
@@ -829,6 +911,7 @@ def _run_archive_binaries(client: JetsonClient, bctx: BringupContext) -> None:
         f" /usr/local/lib/libdepthai*"
         f" /usr/local/bin/rtabmap*"
         f" /usr/local/bin/rtabmap_slam_node"
+        f" /usr/local/bin/mower-kiosk-renderer"
         f" {VERSION_MARKER_DIR}/"
         f" 2>/dev/null || true"
     )
@@ -1775,17 +1858,21 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
 
 
 def _kiosk_services_active(client: JetsonClient) -> bool:
-    """Check: Weston and kiosk dashboard services are active."""
+    """Check: Weston, kiosk data, and kiosk renderer services are active."""
     try:
         r1 = client.run(
             ["systemctl", "is-active", f"{WESTON_UNIT_NAME}.service"],
             timeout=10,
         )
         r2 = client.run(
-            ["systemctl", "is-active", f"{KIOSK_UNIT_NAME}.service"],
+            ["systemctl", "is-active", f"{KIOSK_DATA_UNIT_NAME}.service"],
             timeout=10,
         )
-        return r1.ok and r2.ok
+        r3 = client.run(
+            ["systemctl", "is-active", f"{KIOSK_RENDERER_UNIT_NAME}.service"],
+            timeout=10,
+        )
+        return r1.ok and r2.ok and r3.ok
     except SshError:
         return False
 
@@ -1799,13 +1886,30 @@ def _run_kiosk_services(client: JetsonClient, bctx: BringupContext) -> None:
     home = f"/home/{user}"
     mower_jetson_path = f"{home}/.local/bin/mower-jetson"
 
+    # Cleanup old mower-kiosk.service unit (legacy GTK4 unit)
+    old_kiosk_path = f"/etc/systemd/system/{KIOSK_UNIT_NAME}.service"
+    bctx.console.print("  Removing legacy mower-kiosk.service (if present)…")
+    with contextlib.suppress(SshError):
+        client.run(
+            [f"sudo systemctl stop {KIOSK_UNIT_NAME}.service 2>/dev/null || true"],
+            timeout=15,
+        )
+    with contextlib.suppress(SshError):
+        client.run(
+            [f"sudo systemctl disable {KIOSK_UNIT_NAME}.service 2>/dev/null || true"],
+            timeout=15,
+        )
+    with contextlib.suppress(SshError):
+        client.run([f"sudo rm -f {old_kiosk_path}"], timeout=10)
+
     # Cleanup stale user-level units
     bctx.console.print("  Cleaning up stale user-level units…")
     with contextlib.suppress(SshError):
         client.run(
             [
                 f"~/.local/bin/mower-jetson service cleanup-user-units"
-                f" --unit {WESTON_UNIT_NAME} --unit {KIOSK_UNIT_NAME}",
+                f" --unit {WESTON_UNIT_NAME} --unit {KIOSK_UNIT_NAME}"
+                f" --unit {KIOSK_DATA_UNIT_NAME} --unit {KIOSK_RENDERER_UNIT_NAME}",
             ],
             timeout=30,
         )
@@ -1823,30 +1927,49 @@ def _run_kiosk_services(client: JetsonClient, bctx: BringupContext) -> None:
         bctx.console.print(f"  [red]Weston unit deploy failed:[/red] {exc}")
         raise typer.Exit(code=3) from exc
 
-    # Deploy kiosk unit
-    bctx.console.print("  Deploying mower-kiosk service…")
-    kiosk_unit = generate_kiosk_unit_file(
+    # Deploy kiosk data unit
+    bctx.console.print("  Deploying mower-kiosk-data service…")
+    kiosk_data_unit = generate_kiosk_data_unit_file(
         mower_jetson_path=mower_jetson_path,
         user=user,
         home_dir=home,
     )
-    kiosk_path = f"/etc/systemd/system/{KIOSK_UNIT_NAME}.service"
+    kiosk_data_path = f"/etc/systemd/system/{KIOSK_DATA_UNIT_NAME}.service"
     try:
         client.run(
-            [f"sudo bash -c 'cat > {kiosk_path}' << 'UNITEOF'\n{kiosk_unit}\nUNITEOF"],
+            [f"sudo bash -c 'cat > {kiosk_data_path}' << 'UNITEOF'\n{kiosk_data_unit}\nUNITEOF"],
             timeout=30,
         )
     except SshError as exc:
-        bctx.console.print(f"  [red]Kiosk unit deploy failed:[/red] {exc}")
+        bctx.console.print(f"  [red]Kiosk data unit deploy failed:[/red] {exc}")
         raise typer.Exit(code=3) from exc
 
-    # Reload and enable (start is best-effort — Weston needs a display)
+    # Deploy kiosk renderer unit
+    bctx.console.print("  Deploying mower-kiosk-renderer service…")
+    kiosk_renderer_unit = generate_kiosk_renderer_unit_file(
+        user=user,
+        home_dir=home,
+    )
+    kiosk_renderer_path = f"/etc/systemd/system/{KIOSK_RENDERER_UNIT_NAME}.service"
+    try:
+        client.run(
+            [f"sudo bash -c 'cat > {kiosk_renderer_path}' << 'UNITEOF'\n{kiosk_renderer_unit}\nUNITEOF"],
+            timeout=30,
+        )
+    except SshError as exc:
+        bctx.console.print(f"  [red]Kiosk renderer unit deploy failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+
+    # Reload and enable
     bctx.console.print("  Enabling kiosk services…")
     try:
         client.run(
             [
                 f"sudo systemctl daemon-reload"
-                f" && sudo systemctl enable {WESTON_UNIT_NAME}.service {KIOSK_UNIT_NAME}.service",
+                f" && sudo systemctl enable"
+                f" {WESTON_UNIT_NAME}.service"
+                f" {KIOSK_DATA_UNIT_NAME}.service"
+                f" {KIOSK_RENDERER_UNIT_NAME}.service",
             ],
             timeout=30,
         )
@@ -1858,7 +1981,10 @@ def _run_kiosk_services(client: JetsonClient, bctx: BringupContext) -> None:
     try:
         result = client.run(
             [
-                f"sudo systemctl start {WESTON_UNIT_NAME}.service {KIOSK_UNIT_NAME}.service",
+                f"sudo systemctl start"
+                f" {WESTON_UNIT_NAME}.service"
+                f" {KIOSK_DATA_UNIT_NAME}.service"
+                f" {KIOSK_RENDERER_UNIT_NAME}.service",
             ],
             timeout=60,
         )
@@ -1879,15 +2005,20 @@ def _run_kiosk_services(client: JetsonClient, bctx: BringupContext) -> None:
             timeout=10,
         )
         r2 = client.run(
-            ["systemctl", "is-active", f"{KIOSK_UNIT_NAME}.service"],
+            ["systemctl", "is-active", f"{KIOSK_DATA_UNIT_NAME}.service"],
             timeout=10,
         )
-        if r1.ok and r2.ok:
-            bctx.console.print("  [green]Both kiosk services active.[/green]")
+        r3 = client.run(
+            ["systemctl", "is-active", f"{KIOSK_RENDERER_UNIT_NAME}.service"],
+            timeout=10,
+        )
+        if r1.ok and r2.ok and r3.ok:
+            bctx.console.print("  [green]All kiosk services active.[/green]")
         else:
             bctx.console.print(
                 f"  [yellow]Weston={'active' if r1.ok else 'inactive'}, "
-                f"Kiosk={'active' if r2.ok else 'inactive'}[/yellow]"
+                f"Data={'active' if r2.ok else 'inactive'}, "
+                f"Renderer={'active' if r3.ok else 'inactive'}[/yellow]"
             )
     except SshError:
         bctx.console.print("  [yellow]Could not verify service status.[/yellow]")
@@ -1908,7 +2039,8 @@ def _run_kiosk_probe(client: JetsonClient, bctx: BringupContext) -> None:
 
     kiosk_checks = [
         (f"{WESTON_UNIT_NAME}.service", "weston_active"),
-        (f"{KIOSK_UNIT_NAME}.service", "kiosk_active"),
+        (f"{KIOSK_DATA_UNIT_NAME}.service", "kiosk_data_active"),
+        (f"{KIOSK_RENDERER_UNIT_NAME}.service", "kiosk_renderer_active"),
         (f"{MAVPROXY_UNIT_NAME}.service", "mavproxy_active"),
     ]
 
@@ -2115,6 +2247,12 @@ BRINGUP_STEPS: list[BringupStep] = [
         description="Build RTAB-Map SLAM node binary",
         check=lambda c: _build_slam_node_check(c),
         execute=lambda c, b: _run_build_slam_node(c, b),
+    ),
+    BringupStep(
+        name="build-kiosk-renderer",
+        description="Build LVGL kiosk renderer binary",
+        check=lambda c: _build_kiosk_renderer_check(c),
+        execute=lambda c, b: _run_build_kiosk_renderer(c, b),
     ),
     BringupStep(
         name="archive-binaries",

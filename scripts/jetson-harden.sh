@@ -599,9 +599,9 @@ harden_weston_config() {
         apt-get install -y nvidia-l4t-weston
     fi
 
-    # GTK4/PyGObject build deps for kiosk app
+    # LVGL kiosk renderer build deps (Wayland SHM, no EGL)
     apt-get install -y --no-install-recommends \
-        libgirepository1.0-dev libcairo2-dev gir1.2-gtk-4.0 2>/dev/null || true
+        libwayland-dev libxkbcommon-dev wayland-protocols 2>/dev/null || true
 
     # Ensure nvidia-drm is loaded at boot with modeset (GDM used to trigger this)
     if [[ ! -f /etc/modules-load.d/nvidia-drm.conf ]] || \

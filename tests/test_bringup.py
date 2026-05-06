@@ -1174,6 +1174,7 @@ class TestStepOrdering:
             "build-rtabmap",
             "build-depthai",
             "build-slam-node",
+            "build-kiosk-renderer",
             "archive-binaries",
             "pixhawk-udev",
             "install-uv",
@@ -1190,10 +1191,10 @@ class TestStepOrdering:
             "final-verify",
         )
 
-    def test_all_24_steps_present(self) -> None:
+    def test_all_25_steps_present(self) -> None:
         from mower_rover.cli.bringup import BRINGUP_STEPS
 
-        assert len(BRINGUP_STEPS) == 24
+        assert len(BRINGUP_STEPS) == 25
         names = tuple(s.name for s in BRINGUP_STEPS)
         assert names == STEP_NAMES
 
@@ -1398,7 +1399,7 @@ class TestBringupIntegrationAllSkip:
             )
         assert result.exit_code == 0, result.output
         assert "Bringup complete" in result.output
-        assert result.output.count("Already satisfied") == 22
+        assert result.output.count("Already satisfied") == 23
 
 
 class TestBringupIntegrationFromStep:

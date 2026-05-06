@@ -1,13 +1,18 @@
 """Kiosk application entry point.
 
 Creates SharedState, starts background reader threads (MAVLink,
-slow poller), and runs the GTK4 main loop.  Integrates sdnotify for
-systemd watchdog support.
+slow poller), and runs a Unix socket server that pushes JSON state
+frames to a connected display client at 1 Hz.  Integrates sdnotify
+for systemd watchdog support.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import signal
+import socket
+import struct
 import sys
 import threading
 import time
@@ -18,6 +23,8 @@ from mower_rover.kiosk.state import SharedState
 from mower_rover.logging_setup.setup import get_logger
 
 _log = get_logger("kiosk.app")
+
+KIOSK_SOCKET_PATH = "/run/mower/kiosk-display.sock"
 
 # ── sdnotify integration ─────────────────────────────────────────────────────
 
@@ -197,12 +204,14 @@ def run_kiosk(
     sysroot: Path = Path("/"),
     _shutdown_event: threading.Event | None = None,
     _state: SharedState | None = None,
+    _socket_path: str | None = None,
 ) -> None:
-    """Start the kiosk operational display.
+    """Start the kiosk data server.
 
-    Creates SharedState, launches background threads, and runs the GTK4
-    main loop.  Sends sdnotify ``READY=1`` once the window is realized
-    and ``WATCHDOG=1`` every 15 s via a GLib timer.
+    Creates SharedState, launches background threads, and runs a Unix
+    socket server that pushes length-prefixed JSON state frames at 1 Hz.
+    Sends sdnotify ``READY=1`` once the socket is listening and
+    ``WATCHDOG=1`` every push cycle.
 
     Parameters
     ----------
@@ -214,14 +223,9 @@ def run_kiosk(
         For testing — external shutdown control.
     _state:
         For testing — pre-built SharedState.
+    _socket_path:
+        For testing — override the Unix socket path.
     """
-    import gi
-
-    gi.require_version("Gtk", "4.0")
-    from gi.repository import GLib
-
-    from mower_rover.kiosk.dashboard import KioskApp
-
     state = _state or SharedState()
     shutdown = _shutdown_event or threading.Event()
 
@@ -264,33 +268,67 @@ def run_kiosk(
 
     _log.info("kiosk_threads_started", count=len(threads))
 
-    # Create the GTK application
-    app = KioskApp(state)
+    # Unix socket server
+    sock_path = _socket_path or KIOSK_SOCKET_PATH
+    # Remove stale socket file if it exists
+    if os.path.exists(sock_path):
+        os.unlink(sock_path)
 
-    # sdnotify READY=1 after window is realized — hook into activate signal.
-    # NOTE: must use connect() not instance monkey-patch — GObject dispatches
-    # signals through the class vtable, not instance attributes.
-    def _on_activate(_app: KioskApp) -> None:
-        _notifier.notify("READY=1")  # type: ignore[attr-defined]
-        _log.info("kiosk_ready")
-
-        # Start watchdog timer (every 15s)
-        def _watchdog_tick() -> bool:
-            if shutdown.is_set():
-                return False
-            _notifier.notify("WATCHDOG=1")  # type: ignore[attr-defined]
-            return True
-
-        GLib.timeout_add_seconds(15, _watchdog_tick)
-
-    app.connect("activate", _on_activate)
-
-    # Run GTK main loop (blocks until app quits)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        app.run(None)
+        sock.bind(sock_path)
+        sock.listen(1)
+        sock.settimeout(1.0)
+
+        _notifier.notify("READY=1")  # type: ignore[attr-defined]
+        _log.info("kiosk_ready", socket=sock_path)
+
+        client: socket.socket | None = None
+        while not shutdown.is_set():
+            # Accept new connections
+            if client is None:
+                try:
+                    client, _ = sock.accept()
+                    _log.info("kiosk_client_connected")
+                except socket.timeout:
+                    continue
+
+            # Push state at 1 Hz
+            snap = state.snapshot()
+            payload = json.dumps(snap, separators=(",", ":")).encode()
+            frame = struct.pack("<I", len(payload)) + payload
+            try:
+                client.sendall(frame)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                _log.info("kiosk_client_disconnected")
+                try:
+                    client.close()
+                except OSError:
+                    pass
+                client = None
+                continue
+
+            # Watchdog
+            _notifier.notify("WATCHDOG=1")  # type: ignore[attr-defined]
+
+            # Sleep 1s in 100ms increments for responsive shutdown
+            for _ in range(10):
+                if shutdown.is_set():
+                    break
+                time.sleep(0.1)
     finally:
+        _notifier.notify("STOPPING=1")  # type: ignore[attr-defined]
         shutdown.set()
         _log.info("kiosk_shutting_down")
+
+        if client:
+            try:
+                client.close()
+            except OSError:
+                pass
+        sock.close()
+        if os.path.exists(sock_path):
+            os.unlink(sock_path)
 
         # Wait for threads to exit
         for t in threads:
