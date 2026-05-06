@@ -335,6 +335,48 @@ This plan has been reviewed and is **Ready for Implementation**
 | Created Date | 2026-05-05 |
 | Reviewed By | pch-plan-reviewer |
 | Review Date | 2026-05-05 |
-| Status | ✅ Ready for Implementation |
-| Next Agent | pch-coder |
+| Status | ✅ Complete |
+| Next Agent | — |
 | Plan Location | /docs/plans/020-weston-cold-boot-egl-fix.md |
+
+## Post-Implementation Update (2026-05-05)
+
+### Outcome: Pivoted to Pixman Renderer
+
+After deploying the plan as written (Phase A restart budget + Phase B EGL probe),
+field testing on the Jetson with a display attached revealed a **deeper EGL
+incompatibility** that the probe could not fix:
+
+- On Tegra234 (Orin), the display controller lives on `card0` (`nv_platform`
+  driver, `nvidia-drm` GBM backend).
+- NVIDIA's EGL GBM external platform library (`libnvidia-egl-gbm.so`) only
+  supports the `tegra` GBM backend which is on `card1`/`host1x`.
+- `eglInitialize()` on a GBM device opened from `card0` **always** fails with
+  `EGL_NOT_INITIALIZED (0x3001)` — this is architectural, not a timing issue.
+- Even NVIDIA's own `nvstart-weston.sh` fails the same way.
+- The `gpu-egl-ready` probe returned exit 0 (it uses device-level EGL, not GBM
+  platform EGL), but Weston's `gl-renderer.so` still crashed.
+
+### Final Fix
+
+Switched to **`--renderer=pixman`** (CPU compositing). This bypasses EGL/GBM
+entirely. For the kiosk use case (compositing a single fullscreen Chromium
+window), CPU rendering is perfectly adequate — Chromium does its own GPU
+acceleration internally.
+
+### Changes from Original Plan
+
+| Aspect | Plan | Actual |
+|--------|------|--------|
+| `ExecCondition` | Present (gpu-egl-ready) | **Removed** (not needed with pixman) |
+| `--renderer` flag | Not specified (default=auto=gl) | **`--renderer=pixman`** |
+| EGL probe binary | Built and deployed | **Removed from bringup** |
+| `libegl-dev` dep | Added to _BUILD_APT_PACKAGES | **Removed** |
+| Phase A restart budget | Deployed | **Retained** (still useful for DRM timing) |
+
+### Verification
+
+- Weston starts on cold boot within 2s (no EGL delay).
+- `systemctl status mower-weston.service` shows `active (running)`.
+- Display output confirmed on Samsung C27F591 via DP-1.
+- All 813 tests pass.
