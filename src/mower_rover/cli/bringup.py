@@ -1759,7 +1759,11 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
     bctx.console.print("  Deploying mower-mavproxy service unit…")
     unit_content = generate_mavproxy_unit_file(
         master="/dev/pixhawk",
-        outputs=["udp:127.0.0.1:14550", "udp:127.0.0.1:14551"],
+        outputs=[
+            "udp:127.0.0.1:14550",
+            "udp:127.0.0.1:14551",
+            "udp:127.0.0.1:14552",
+        ],
         user=user,
         home_dir=home,
     )
