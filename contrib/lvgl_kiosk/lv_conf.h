@@ -34,6 +34,7 @@
 #define LV_USE_TABLE            1
 #define LV_USE_BTN              1
 #define LV_USE_IMG              1
+#define LV_USE_SCALE            1
 
 /* Animation support */
 #define LV_USE_ANIM             1

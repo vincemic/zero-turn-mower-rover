@@ -398,6 +398,19 @@ Default Jetson config path: `~/.config/mower-rover/jetson.yaml`.
                                                        │                                  │
                                                        │  mower-health.service            │
                                                        │  (disk, thermal, power watchdog) │
+                                                       │                                  │
+                                                       │  ┌──────────────────────────┐    │
+                                                       │  │ mower-kiosk-data.service │    │
+                                                       │  │ (Python, telemetry JSON) │    │
+                                                       │  └──────────┬───────────────┘    │
+                                                       │             │ Unix socket IPC    │
+                                                       │  ┌──────────▼───────────────┐    │
+                                                       │  │ mower-kiosk-renderer.svc │    │
+                                                       │  │ (C/LVGL 9.5, Wayland)   │    │
+                                                       │  └──────────────────────────┘    │
+                                                       │                                  │
+                                                       │  mower-weston.service            │
+                                                       │  (Wayland compositor, pixman)    │
                                                        └──────────────────────────────────┘
 ```
 
@@ -407,6 +420,12 @@ Default Jetson config path: `~/.config/mower-rover/jetson.yaml`.
 2. **`mower-vslam-bridge.service`** — Python bridge (`src/mower_rover/vslam/bridge.py`) reads poses from the Unix socket, converts FLU → NED, and forwards `VISION_POSITION_ESTIMATE` / `VISION_SPEED_ESTIMATE` to the Cube Orange over MAVLink.
 3. **ArduPilot Lua script** (deployed via `mower-jetson vslam install` / `lua_deploy.py`) enables EKF source switching between GPS and visual odometry.
 
+### Kiosk pipeline
+
+1. **`mower-weston.service`** — Wayland compositor (pixman renderer on Tegra234 card0, `seatd` seat backend).
+2. **`mower-kiosk-data.service`** — Python daemon (`mower-jetson kiosk run`) aggregates health/VSLAM/MAVLink telemetry and publishes JSON frames to `/run/mower/kiosk-display.sock`.
+3. **`mower-kiosk-renderer.service`** — Native C/LVGL 9.5 binary (`contrib/lvgl_kiosk/`) renders an 8-card dashboard (VSLAM, Vehicle, GPS/RTK, System Health, Storage, Wi-Fi, Services, Alerts) at ~30 FPS with high-contrast outdoor colors via Wayland SHM (NEON-accelerated software rendering, no EGL/GL).
+
 ### Jetson systemd services
 
 | Service | Type | Purpose |
@@ -414,8 +433,12 @@ Default Jetson config path: `~/.config/mower-rover/jetson.yaml`.
 | `mower-health.service` | `Type=notify` | Disk, thermal, and power health watchdog |
 | `mower-vslam.service` | — | RTAB-Map SLAM node (C++ binary) |
 | `mower-vslam-bridge.service` | — | VSLAM → MAVLink bridge (Python) |
+| `mower-weston.service` | — | Wayland compositor (pixman renderer, seatd backend) |
+| `mower-kiosk-data.service` | `Type=notify` | Python telemetry aggregator publishing JSON to Unix socket |
+| `mower-kiosk-renderer.service` | `Type=notify` | Native C/LVGL 9.5 dashboard rendering to Wayland |
+| `mower-mavproxy.service` | — | MAVProxy for MAVLink access sharing |
 
-All three are **system-level** units installed to `/etc/systemd/system/`. They are `enable`d at install time so they start automatically on boot.
+All are **system-level** units installed to `/etc/systemd/system/`. They are `enable`d at install time so they start automatically on boot.
 
 #### VSLAM service architecture
 
@@ -427,6 +450,10 @@ The VSLAM service holds a persistent `dai::Device()` connection to the OAK-D Pro
 /etc/systemd/system/mower-vslam.service
 /etc/systemd/system/mower-vslam-bridge.service
 /etc/systemd/system/mower-health.service
+/etc/systemd/system/mower-weston.service
+/etc/systemd/system/mower-kiosk-data.service
+/etc/systemd/system/mower-kiosk-renderer.service
+/etc/systemd/system/mower-mavproxy.service
 ```
 
 **Inspecting service status:**
@@ -579,6 +606,7 @@ src/mower_rover/
 └── vslam/          # VSLAM bridge, IPC, frame transforms, Lua deploy
 
 contrib/rtabmap_slam_node/  # C++ RTAB-Map SLAM node (builds on Jetson)
+contrib/lvgl_kiosk/         # C/LVGL kiosk renderer (Wayland, builds on Jetson)
 scripts/                    # Hardening and udev rules
 docs/                       # Vision, research, plans, procedures, field notes
 ```

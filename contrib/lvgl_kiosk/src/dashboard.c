@@ -43,7 +43,7 @@ static lv_obj_t *vslam_conf_label = NULL;
 static lv_obj_t *vehicle_led      = NULL;
 static lv_obj_t *vehicle_mode_label  = NULL;
 static lv_obj_t *vehicle_speed_label = NULL;
-static lv_obj_t *vehicle_hdg_label   = NULL;
+static lv_obj_t *vehicle_compass     = NULL;
 
 /* Card 2: GPS/RTK */
 static lv_obj_t *gps_arc          = NULL;
@@ -235,10 +235,7 @@ static void create_card_vehicle(lv_obj_t *parent)
     lv_obj_set_style_text_color(vehicle_speed_label, THEME_COLOR_FG, 0);
     lv_obj_set_style_text_font(vehicle_speed_label, &lv_font_montserrat_18, 0);
 
-    vehicle_hdg_label = lv_label_create(card);
-    lv_label_set_text(vehicle_hdg_label, "Heading: --°");
-    lv_obj_set_style_text_color(vehicle_hdg_label, THEME_COLOR_FG_DIM, 0);
-    lv_obj_set_style_text_font(vehicle_hdg_label, &lv_font_montserrat_18, 0);
+    vehicle_compass = widget_create_compass(card, 200);
 }
 
 /* ─── Card 2: GPS/RTK ──────────────────────────────────────────────── */
@@ -514,8 +511,7 @@ void update_dashboard(const kiosk_data_t *data)
     lv_label_set_text_fmt(vehicle_mode_label, "%s", data->mav_mode);
     lv_label_set_text_fmt(vehicle_speed_label, "Speed: %.1f m/s",
                           data->mav_groundspeed_ms);
-    lv_label_set_text_fmt(vehicle_hdg_label, "Heading: %d°",
-                          data->mav_heading_deg);
+    widget_compass_set_heading(vehicle_compass, data->mav_heading_deg);
 
     /* Card 2: GPS/RTK */
     widget_arc_set_value_animated(gps_arc, data->mav_gps1_fix, 6);

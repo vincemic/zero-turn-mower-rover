@@ -100,6 +100,23 @@ void widget_chart_add_point(lv_obj_t *chart, lv_chart_series_t *series,
  */
 lv_obj_t *widget_create_scroll_label(lv_obj_t *parent);
 
+/**
+ * Create a 360° compass rose (round-inner scale).
+ *
+ * @param parent  Parent container
+ * @param size    Compass diameter in pixels
+ * @return        The created scale object (center label is child 0)
+ */
+lv_obj_t *widget_create_compass(lv_obj_t *parent, int size);
+
+/**
+ * Set compass heading with animated shortest-path rotation.
+ *
+ * @param compass  Scale object from widget_create_compass()
+ * @param heading_deg  Heading 0..359
+ */
+void widget_compass_set_heading(lv_obj_t *compass, int heading_deg);
+
 #ifdef __cplusplus
 }
 #endif
