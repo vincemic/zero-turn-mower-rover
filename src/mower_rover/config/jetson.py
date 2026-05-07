@@ -43,6 +43,7 @@ def _default_mavproxy_outputs() -> list[str]:
     return [
         "udp:127.0.0.1:14550",
         "udp:127.0.0.1:14551",
+        "udp:127.0.0.1:14552",
     ]
 
 
@@ -55,6 +56,7 @@ class KioskConfig:
     mavproxy_outputs: list[str] = field(default_factory=_default_mavproxy_outputs)
     vslam_socket: str = "/run/mower/vslam-pose.sock"
     refresh_hz: int = 1
+    heartbeat_staleness_s: float = 60.0
     service_check_units: list[str] = field(default_factory=_default_kiosk_service_units)
 
 
@@ -118,6 +120,13 @@ def _coerce_kiosk(raw: Any) -> KioskConfig:
         if not isinstance(v, int) or v <= 0:
             raise JetsonConfigError(f"kiosk.refresh_hz must be a positive integer, got {v!r}")
         kwargs["refresh_hz"] = v
+    if "heartbeat_staleness_s" in raw:
+        v = raw["heartbeat_staleness_s"]
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise JetsonConfigError(
+                f"kiosk.heartbeat_staleness_s must be a positive number, got {v!r}"
+            )
+        kwargs["heartbeat_staleness_s"] = float(v)
     if "service_check_units" in raw:
         v = raw["service_check_units"]
         if not isinstance(v, list) or not all(isinstance(i, str) for i in v):

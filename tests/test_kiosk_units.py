@@ -8,9 +8,13 @@ from mower_rover.config.jetson import JetsonConfig, KioskConfig
 from mower_rover.kiosk.units import install_kiosk_units, uninstall_kiosk_units
 from mower_rover.safety.confirm import SafetyContext
 from mower_rover.service.unit import (
+    KIOSK_DATA_UNIT_NAME,
+    KIOSK_RENDERER_UNIT_NAME,
     KIOSK_UNIT_NAME,
     MAVPROXY_UNIT_NAME,
     WESTON_UNIT_NAME,
+    generate_kiosk_data_unit_file,
+    generate_kiosk_renderer_unit_file,
     generate_kiosk_unit_file,
     generate_mavproxy_unit_file,
     generate_service_unit,
@@ -208,7 +212,8 @@ class TestGenerateMavproxyUnit:
             master="/dev/ttyACM0",
             outputs=["udp:127.0.0.1:14550"],
         )
-        assert "--daemon --non-interactive" in content
+        assert "--non-interactive" in content
+        assert "--daemon" not in content
 
     def test_restart_always(self) -> None:
         content = generate_mavproxy_unit_file(
@@ -232,6 +237,20 @@ class TestGenerateMavproxyUnit:
             outputs=["udp:127.0.0.1:14550"],
         )
         assert "WantedBy=multi-user.target" in content
+
+    def test_binds_to_pixhawk_device(self) -> None:
+        content = generate_mavproxy_unit_file(
+            master="/dev/ttyACM0",
+            outputs=["udp:127.0.0.1:14550"],
+        )
+        assert "BindsTo=dev-pixhawk.device" in content
+
+    def test_after_includes_pixhawk_device(self) -> None:
+        content = generate_mavproxy_unit_file(
+            master="/dev/ttyACM0",
+            outputs=["udp:127.0.0.1:14550"],
+        )
+        assert "After=network.target dev-pixhawk.device" in content
 
 
 # ---------------------------------------------------------------------------
@@ -432,3 +451,49 @@ class TestUninstallKioskUnits:
         remaining = list(tmp_path.glob("*.service"))
         assert len(remaining) == 3
         mock_ctl.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# generate_kiosk_data_unit_file
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateKioskDataUnitFile:
+    def _content(self) -> str:
+        return generate_kiosk_data_unit_file(
+            mower_jetson_path="/home/vincent/.local/bin/mower-jetson",
+        )
+
+    def test_after_includes_weston_and_mavproxy(self) -> None:
+        content = self._content()
+        assert (
+            f"After={WESTON_UNIT_NAME}.service {MAVPROXY_UNIT_NAME}.service"
+            in content
+        )
+
+    def test_requires_weston(self) -> None:
+        content = self._content()
+        assert f"Requires={WESTON_UNIT_NAME}.service" in content
+
+    def test_no_requires_mavproxy(self) -> None:
+        content = self._content()
+        assert f"Requires={MAVPROXY_UNIT_NAME}.service" not in content
+        assert "Requires=mower-mavproxy" not in content
+
+
+# ---------------------------------------------------------------------------
+# generate_kiosk_renderer_unit_file
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateKioskRendererUnitFile:
+    def _content(self) -> str:
+        return generate_kiosk_renderer_unit_file()
+
+    def test_after_includes_kiosk_data(self) -> None:
+        content = self._content()
+        assert f"{KIOSK_DATA_UNIT_NAME}.service" in content
+        assert (
+            f"After={WESTON_UNIT_NAME}.service {KIOSK_DATA_UNIT_NAME}.service"
+            in content
+        )

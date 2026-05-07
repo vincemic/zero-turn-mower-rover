@@ -494,7 +494,15 @@ class TestGenerateVslamBridgeUnitFile:
             user="mower",
             home_dir="/home/mower",
         )
-        assert "Requires=mower-mavproxy.service" in content
+        assert "Requires=mower-mavproxy.service mower-vslam.service" in content
+
+    def test_start_limit_interval_sec_900(self) -> None:
+        content = generate_vslam_bridge_unit_file(
+            mower_jetson_path="/usr/bin/mower-jetson",
+            user="mower",
+            home_dir="/home/mower",
+        )
+        assert "StartLimitIntervalSec=900" in content
 
 
 # ---------------------------------------------------------------------------

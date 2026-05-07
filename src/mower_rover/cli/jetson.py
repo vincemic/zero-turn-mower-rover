@@ -1052,10 +1052,10 @@ PIXHAWK_SYNC_UNIT_NAME = "mower-pixhawk-sync"
 def pixhawk_sync_command(
     ctx: typer.Context,
     endpoint: str = typer.Option(
-        "/dev/pixhawk",
+        "udp:127.0.0.1:14552",
         "--port",
         "--endpoint",
-        help="MAVLink endpoint. Default: /dev/pixhawk (USB).",
+        help="MAVLink endpoint. Default: udp:127.0.0.1:14552 (via MAVProxy).",
     ),
     baud: int = typer.Option(0, help="Serial baud (0 for USB CDC)."),
     json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),

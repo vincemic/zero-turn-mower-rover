@@ -6,6 +6,34 @@ Windows CI).
 
 from __future__ import annotations
 
+import time
+
+
+class TestWatchdogGating:
+    """Tests for _should_notify_watchdog() heartbeat freshness gating."""
+
+    def test_watchdog_fires_when_never_connected(self):
+        """WATCHDOG=1 IS sent when last_heartbeat_epoch == 0.0 (never connected)."""
+        from mower_rover.kiosk.app import _should_notify_watchdog
+
+        assert _should_notify_watchdog(last_hb=0.0, now=time.time(), staleness_s=60.0) is True
+
+    def test_watchdog_fires_when_heartbeat_fresh(self):
+        """WATCHDOG=1 IS sent when heartbeat is within staleness threshold."""
+        from mower_rover.kiosk.app import _should_notify_watchdog
+
+        now = time.time()
+        last_hb = now - 10.0  # 10 seconds ago, threshold is 60
+        assert _should_notify_watchdog(last_hb=last_hb, now=now, staleness_s=60.0) is True
+
+    def test_watchdog_suppressed_when_heartbeat_stale(self):
+        """WATCHDOG=1 is NOT sent when heartbeat was received but is now stale."""
+        from mower_rover.kiosk.app import _should_notify_watchdog
+
+        now = time.time()
+        last_hb = now - 120.0  # 120 seconds ago, threshold is 60
+        assert _should_notify_watchdog(last_hb=last_hb, now=now, staleness_s=60.0) is False
+
 
 class TestUnitDisplayKey:
     """Tests for _unit_display_key() helper."""

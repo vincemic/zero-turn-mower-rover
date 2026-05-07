@@ -8,6 +8,8 @@ import yaml
 from mower_rover.config.jetson import (
     JetsonConfig,
     JetsonConfigError,
+    KioskConfig,
+    _coerce_kiosk,
     load_jetson_config,
     save_jetson_config,
 )
@@ -90,3 +92,32 @@ def test_laptop_config_rejects_bad_port(tmp_path: Path) -> None:
     )
     with pytest.raises(LaptopConfigError):
         load_laptop_config(target)
+
+
+# ---------------------------------------------------------------------------
+# KioskConfig.heartbeat_staleness_s
+# ---------------------------------------------------------------------------
+
+
+def test_kiosk_config_default_heartbeat_staleness() -> None:
+    """KioskConfig defaults include heartbeat_staleness_s=60.0."""
+    cfg = KioskConfig()
+    assert cfg.heartbeat_staleness_s == 60.0
+
+
+def test_coerce_kiosk_heartbeat_staleness_valid() -> None:
+    """_coerce_kiosk with heartbeat_staleness_s=30 produces 30.0."""
+    cfg = _coerce_kiosk({"heartbeat_staleness_s": 30})
+    assert cfg.heartbeat_staleness_s == 30.0
+
+
+def test_coerce_kiosk_heartbeat_staleness_negative() -> None:
+    """_coerce_kiosk rejects negative heartbeat_staleness_s."""
+    with pytest.raises(JetsonConfigError):
+        _coerce_kiosk({"heartbeat_staleness_s": -5})
+
+
+def test_coerce_kiosk_heartbeat_staleness_string() -> None:
+    """_coerce_kiosk rejects non-numeric heartbeat_staleness_s."""
+    with pytest.raises(JetsonConfigError):
+        _coerce_kiosk({"heartbeat_staleness_s": "bad"})

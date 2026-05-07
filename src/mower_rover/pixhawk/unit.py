@@ -24,17 +24,17 @@ def generate_pixhawk_sync_unit_file(
     user_level: bool = True,
 ) -> str:
     """Return a systemd oneshot unit that runs ``mower-jetson pixhawk sync``."""
-    exec_start = f"{mower_jetson_path} pixhawk sync"
+    exec_start = f"{mower_jetson_path} pixhawk sync --port udp:127.0.0.1:14552"
 
-    after = "network.target dev-pixhawk.device"
-    binds_to = "BindsTo=dev-pixhawk.device\n"
+    after = "network.target mower-mavproxy.service"
+    requires = "Requires=mower-mavproxy.service\n"
 
     if user_level:
         return f"""\
 [Unit]
 Description=Mower Rover Pixhawk config sync (params + Lua)
 After={after}
-{binds_to}
+{requires}
 [Service]
 Type=oneshot
 ExecStart={exec_start}
@@ -42,6 +42,8 @@ Environment=MOWER_CORRELATION_ID=pixhawk-sync
 WorkingDirectory={home_dir}
 TimeoutStartSec=120
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=30
 
 [Install]
 WantedBy=default.target
@@ -50,7 +52,7 @@ WantedBy=default.target
 [Unit]
 Description=Mower Rover Pixhawk config sync (params + Lua)
 After={after}
-{binds_to}
+{requires}
 [Service]
 Type=oneshot
 ExecStart={exec_start}
@@ -59,6 +61,8 @@ User={user}
 WorkingDirectory={home_dir}
 TimeoutStartSec=120
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

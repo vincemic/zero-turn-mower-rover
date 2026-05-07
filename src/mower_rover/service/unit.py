@@ -36,7 +36,7 @@ _GENERIC_SYSTEM_TEMPLATE = """\
 [Unit]
 Description={description}
 After={after}
-StartLimitIntervalSec=300
+StartLimitIntervalSec={start_limit_interval_sec}
 StartLimitBurst=5
 {binds_to}{requires}
 [Service]
@@ -57,7 +57,7 @@ _GENERIC_USER_TEMPLATE = """\
 [Unit]
 Description={description}
 After={after}
-StartLimitIntervalSec=300
+StartLimitIntervalSec={start_limit_interval_sec}
 StartLimitBurst=5
 {binds_to}{requires}
 [Service]
@@ -91,6 +91,7 @@ def generate_service_unit(
     extra_environment: dict[str, str] | None = None,
     restart_sec: int = 5,
     exec_start_pre: list[str] | None = None,
+    start_limit_interval_sec: int = 300,
 ) -> str:
     """Return a systemd unit file from the generic template.
 
@@ -109,6 +110,10 @@ def generate_service_unit(
         extra_env_lines = "".join(
             f"Environment={k}={v}\n" for k, v in extra_environment.items()
         )
+    # Defensive: ensure extra_environment block always ends with \n to
+    # prevent concatenation with the next directive (User= / WorkingDirectory=).
+    if extra_env_lines and not extra_env_lines.endswith("\n"):
+        extra_env_lines += "\n"
     exec_start_pre_lines = ""
     if exec_start_pre:
         exec_start_pre_lines = "".join(
@@ -130,6 +135,7 @@ def generate_service_unit(
         extra_environment=extra_env_lines,
         restart_sec=restart_sec,
         exec_start_pre=exec_start_pre_lines,
+        start_limit_interval_sec=start_limit_interval_sec,
     )
 
 
@@ -398,11 +404,12 @@ def generate_vslam_bridge_unit_file(
         home_dir=home_dir,
         user_level=user_level,
         after=f"network.target {VSLAM_UNIT_NAME}.service {MAVPROXY_UNIT_NAME}.service",
-        requires=f"{MAVPROXY_UNIT_NAME}.service",
+        requires=f"{MAVPROXY_UNIT_NAME}.service {VSLAM_UNIT_NAME}.service",
         binds_to=None,
         watchdog_sec=30,
         timeout_start_sec=120,
         runtime_directory=None,
+        start_limit_interval_sec=900,
     )
 
 
@@ -445,7 +452,8 @@ WantedBy=multi-user.target
 _MAVPROXY_UNIT_TEMPLATE = """\
 [Unit]
 Description=MAVProxy telemetry forwarder for mower
-After=network.target
+After=network.target dev-pixhawk.device
+BindsTo=dev-pixhawk.device
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -486,7 +494,7 @@ def generate_mavproxy_unit_file(
     """Return the content of a systemd unit file for the mower-mavproxy service."""
     out_args = " ".join(f"--out={o}" for o in outputs)
     mavproxy_bin = f"{home_dir}/.local/share/uv/tools/mower-rover/bin/mavproxy.py"
-    exec_start = f"{mavproxy_bin} --master={master} {out_args} --daemon --non-interactive"
+    exec_start = f"{mavproxy_bin} --master={master} {out_args} --non-interactive"
     return _MAVPROXY_UNIT_TEMPLATE.format(
         exec_start=exec_start,
         user=user,
@@ -541,7 +549,8 @@ def generate_kiosk_data_unit_file(
         user=user,
         home_dir=home_dir,
         user_level=False,
-        after=f"{WESTON_UNIT_NAME}.service",
+        after=f"{WESTON_UNIT_NAME}.service {MAVPROXY_UNIT_NAME}.service",
+        requires=f"{WESTON_UNIT_NAME}.service",
         watchdog_sec=30,
         service_type="notify",
         runtime_directory="mower",
@@ -564,7 +573,7 @@ def generate_kiosk_renderer_unit_file(
         user=user,
         home_dir=home_dir,
         user_level=False,
-        after=f"{WESTON_UNIT_NAME}.service",
+        after=f"{WESTON_UNIT_NAME}.service {KIOSK_DATA_UNIT_NAME}.service",
         binds_to=f"{WESTON_UNIT_NAME}.service",
         watchdog_sec=30,
         service_type="notify",

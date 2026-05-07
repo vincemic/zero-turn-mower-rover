@@ -26,6 +26,18 @@ _log = get_logger("kiosk.app")
 
 KIOSK_SOCKET_PATH = "/run/mower/kiosk-display.sock"
 
+
+def _should_notify_watchdog(last_hb: float, now: float, staleness_s: float) -> bool:
+    """Return True if the watchdog should fire.
+
+    Fires when heartbeat was never received (last_hb == 0.0) or is fresh
+    (within staleness_s).  Suppresses when a previously-received heartbeat
+    has gone stale.
+    """
+    if last_hb == 0.0:
+        return True
+    return now - last_hb < staleness_s
+
 # ── sdnotify integration ─────────────────────────────────────────────────────
 
 try:
@@ -266,6 +278,7 @@ def run_kiosk(
     t_poller.start()
     threads.append(t_poller)
 
+    staleness_s = cfg.kiosk.heartbeat_staleness_s
     _log.info("kiosk_threads_started", count=len(threads))
 
     # Unix socket server
@@ -284,9 +297,29 @@ def run_kiosk(
         _log.info("kiosk_ready", socket=sock_path)
 
         client: socket.socket | None = None
+        watchdog_suppressed = False
         while not shutdown.is_set():
-            # Watchdog — must fire every iteration regardless of client state
-            _notifier.notify("WATCHDOG=1")  # type: ignore[attr-defined]
+            # Take an atomic snapshot BEFORE watchdog check
+            snap = state.snapshot()
+
+            # Watchdog gating on heartbeat freshness
+            last_hb = snap["mav"]["last_heartbeat_epoch"]
+            now = time.time()
+            should_notify = _should_notify_watchdog(last_hb, now, staleness_s)
+
+            if should_notify:
+                if watchdog_suppressed:
+                    _log.info("watchdog_resumed", last_heartbeat_epoch=last_hb)
+                    watchdog_suppressed = False
+                _notifier.notify("WATCHDOG=1")  # type: ignore[attr-defined]
+            else:
+                if not watchdog_suppressed:
+                    _log.warning(
+                        "watchdog_suppressed_stale_heartbeat",
+                        last_heartbeat_epoch=last_hb,
+                        staleness_s=staleness_s,
+                    )
+                    watchdog_suppressed = True
 
             # Accept new connections
             if client is None:
@@ -297,7 +330,6 @@ def run_kiosk(
                     continue
 
             # Push state at 1 Hz
-            snap = state.snapshot()
             payload = json.dumps(snap, separators=(",", ":")).encode()
             frame = struct.pack("<I", len(payload)) + payload
             try:

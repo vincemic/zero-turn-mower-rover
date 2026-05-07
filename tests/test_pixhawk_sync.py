@@ -206,8 +206,13 @@ class TestPixhawkSyncUnit:
         assert "mower-jetson pixhawk sync" in content
         assert "WantedBy=default.target" in content
         assert "User=" not in content  # user-level units don't need User=
-        assert "dev-pixhawk.device" in content
+        assert "mower-mavproxy.service" in content
+        assert "Requires=mower-mavproxy.service" in content
+        assert "dev-pixhawk.device" not in content
         assert "RemainAfterExit=yes" in content
+        assert "Restart=on-failure" in content
+        assert "RestartSec=30" in content
+        assert "--port udp:127.0.0.1:14552" in content
 
     def test_system_level_unit(self) -> None:
         from mower_rover.pixhawk.unit import generate_pixhawk_sync_unit_file
@@ -221,6 +226,12 @@ class TestPixhawkSyncUnit:
         assert "Type=oneshot" in content
         assert "User=mower" in content
         assert "WantedBy=multi-user.target" in content
+        assert "mower-mavproxy.service" in content
+        assert "Requires=mower-mavproxy.service" in content
+        assert "dev-pixhawk.device" not in content
+        assert "Restart=on-failure" in content
+        assert "RestartSec=30" in content
+        assert "--port udp:127.0.0.1:14552" in content
 
 
 # ---------------------------------------------------------------------------
