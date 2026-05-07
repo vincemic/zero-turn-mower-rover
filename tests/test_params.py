@@ -120,7 +120,6 @@ SAFETY_KEYS = (
     "FS_EKF_ACTION",
     "FS_ACTION",
     "FS_GCS_ENABLE",
-    "FS_GCS_TIMEOUT",
     "ARMING_CHECK",
 )
 
@@ -132,15 +131,14 @@ def test_profiles_registry_contains_baseline_and_safety_defaults() -> None:
     assert PROFILES["safety-defaults"] == SAFETY_DEFAULTS_PATH
 
 
-def test_load_profile_safety_defaults_has_seven_keys() -> None:
+def test_load_profile_safety_defaults_has_six_keys() -> None:
     p = load_profile("safety-defaults")
-    assert len(p) == 7
+    assert len(p) == 6
     assert p["FENCE_ENABLE"] == 1
     assert p["FENCE_ACTION"] == 2
     assert p["FS_EKF_ACTION"] == 2
     assert p["FS_ACTION"] == 2
     assert p["FS_GCS_ENABLE"] == 1
-    assert p["FS_GCS_TIMEOUT"] == 5
     assert p["ARMING_CHECK"] == 13816
 
 

@@ -23,7 +23,6 @@ from mower_rover.mavlink.connection import ConnectionConfig, open_link
 from mower_rover.vslam.frames import flu_to_ned_pose, flu_to_ned_velocity
 from mower_rover.vslam.health import TimestampedPose, compute_health
 from mower_rover.vslam.ipc import PoseMessage, PoseReader
-from mower_rover.vslam.lua_deploy import check_and_deploy_lua
 
 try:
     import sdnotify
@@ -203,9 +202,6 @@ def run_bridge(
     reader = PoseReader(cfg.socket_path)
 
     with open_link(conn_cfg, shutdown_event=shutdown) as conn:
-        # Deploy AHRS source-switching Lua script before entering pose loop
-        check_and_deploy_lua(conn)
-
         _notifier.notify("READY=1")  # type: ignore[attr-defined]
         log.info("bridge_started")
 

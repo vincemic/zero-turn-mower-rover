@@ -88,7 +88,7 @@ def sync_params(
         current_full = fetch_params(conn)
     except Exception as exc:
         msg = f"fetch_params failed: {exc}"
-        log.error("sync_fetch_failed", error=str(exc))
+        log.error("sync_fetch_failed", error=str(exc), exc_info=True)
         result.errors.append(msg)
         return result
 
@@ -118,17 +118,37 @@ def sync_params(
         result.profiles_applied = list(profiles)
         return result
 
-    try:
-        apply_params(conn, desired)
-    except Exception as exc:
-        msg = f"apply_params failed: {exc}"
-        log.error("sync_apply_failed", error=str(exc))
-        result.errors.append(msg)
-        return result
+    # Warn about params in desired but not on firmware (diff.added means
+    # present in desired but absent from autopilot's current param set).
+    for c in diff.added:
+        log.warning(
+            "sync_param_not_on_firmware",
+            name=c.name,
+            value=c.new,
+            hint="param may require firmware upgrade",
+        )
 
-    result.params_applied = n_changes
+    # Build set of params that actually need changing (only drifted params).
+    to_apply = ParamSet.from_mapping({c.name: c.new for c in diff.changed})
+
+    if to_apply:
+        try:
+            apply_result = apply_params(conn, to_apply)
+        except Exception as exc:
+            msg = f"apply_params failed: {exc}"
+            log.error("sync_apply_failed", error=str(exc), exc_info=True)
+            result.errors.append(msg)
+            return result
+
+        if not apply_result.ok:
+            for name, value, reason in apply_result.failures:
+                msg = f"param {name}={value} failed: {reason}"
+                log.error("sync_param_failed", name=name, value=value, reason=reason)
+                result.errors.append(msg)
+
+    result.params_applied = len(diff.changed)
     result.profiles_applied = list(profiles)
-    log.info("sync_params_applied", count=n_changes, profiles=list(profiles))
+    log.info("sync_params_applied", count=len(diff.changed), profiles=list(profiles))
     return result
 
 
@@ -143,7 +163,7 @@ def sync_lua(conn: Any) -> SyncResult:
         check_and_deploy_lua(conn)
         result.lua_deployed = True
     except Exception as exc:  # noqa: BLE001
-        _log.warning("sync_lua_failed", error=str(exc))
+        _log.warning("sync_lua_failed", error=str(exc), exc_info=True)
         result.errors.append(f"lua deploy: {exc}")
     return result
 

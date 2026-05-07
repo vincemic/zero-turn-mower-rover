@@ -27,6 +27,7 @@ KIOSK_UNIT_NAME = "mower-kiosk"  # Legacy name — kept for cleanup of old unit
 KIOSK_DATA_UNIT_NAME = "mower-kiosk-data"
 KIOSK_RENDERER_UNIT_NAME = "mower-kiosk-renderer"
 MAVPROXY_UNIT_NAME = "mower-mavproxy"
+PIXHAWK_SYNC_UNIT_NAME = "mower-pixhawk-sync"
 
 # ---------------------------------------------------------------------------
 # Generic unit templates
@@ -37,7 +38,7 @@ _GENERIC_SYSTEM_TEMPLATE = """\
 Description={description}
 After={after}
 StartLimitIntervalSec={start_limit_interval_sec}
-StartLimitBurst=5
+StartLimitBurst={start_limit_burst}
 {binds_to}{requires}
 [Service]
 Type={service_type}
@@ -58,7 +59,7 @@ _GENERIC_USER_TEMPLATE = """\
 Description={description}
 After={after}
 StartLimitIntervalSec={start_limit_interval_sec}
-StartLimitBurst=5
+StartLimitBurst={start_limit_burst}
 {binds_to}{requires}
 [Service]
 Type={service_type}
@@ -92,6 +93,7 @@ def generate_service_unit(
     restart_sec: int = 5,
     exec_start_pre: list[str] | None = None,
     start_limit_interval_sec: int = 300,
+    start_limit_burst: int = 5,
 ) -> str:
     """Return a systemd unit file from the generic template.
 
@@ -136,6 +138,7 @@ def generate_service_unit(
         restart_sec=restart_sec,
         exec_start_pre=exec_start_pre_lines,
         start_limit_interval_sec=start_limit_interval_sec,
+        start_limit_burst=start_limit_burst,
     )
 
 
@@ -403,7 +406,7 @@ def generate_vslam_bridge_unit_file(
         user=user,
         home_dir=home_dir,
         user_level=user_level,
-        after=f"network.target {VSLAM_UNIT_NAME}.service {MAVPROXY_UNIT_NAME}.service",
+        after=f"network.target {VSLAM_UNIT_NAME}.service {MAVPROXY_UNIT_NAME}.service {PIXHAWK_SYNC_UNIT_NAME}.service",
         requires=f"{MAVPROXY_UNIT_NAME}.service {VSLAM_UNIT_NAME}.service",
         binds_to=None,
         watchdog_sec=30,
@@ -437,6 +440,7 @@ StartLimitBurst=30
 [Service]
 Type=simple
 ExecStartPre=/bin/mkdir -p /var/log/mower-jetson
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 10); do [ -S /run/seatd.sock ] && exit 0; sleep 0.5; done; echo "seatd not ready"; exit 1'
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do [ -e /dev/dri/card0 ] && exit 0; sleep 1; done; echo "DRM device not found"; exit 1'
 ExecStart={weston_exec_start}
 Environment=XDG_RUNTIME_DIR=/run/user/1000
@@ -585,6 +589,7 @@ def generate_kiosk_renderer_unit_file(
         exec_start_pre=[
             "/bin/sh -c 'for i in $(seq 1 30); do [ -e /run/user/1000/wayland-0 ] && exit 0; sleep 0.5; done; echo \"Wayland socket not found\"; exit 1'",
         ],
+        start_limit_burst=15,
     )
 
 

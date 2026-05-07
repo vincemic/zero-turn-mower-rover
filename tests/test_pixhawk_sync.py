@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from mower_rover.params.baseline import load_profile
+from mower_rover.params.mav import ApplyResult
 from mower_rover.pixhawk.sync import SyncResult, sync_params, sync_pixhawk
 
 
@@ -57,7 +58,10 @@ class TestSyncParams:
         conn = self._mock_conn(current)
         with (
             patch("mower_rover.pixhawk.sync.fetch_params", return_value=current),
-            patch("mower_rover.pixhawk.sync.apply_params") as mock_apply,
+            patch(
+                "mower_rover.pixhawk.sync.apply_params",
+                return_value=ApplyResult(applied={first_key: profile[first_key]}, failures=[]),
+            ) as mock_apply,
         ):
             result = sync_params(conn, profiles=("safety-defaults",))
 
@@ -105,7 +109,7 @@ class TestSyncParams:
         assert any("fetch_params" in e for e in result.errors)
 
     def test_apply_failure_errors(self) -> None:
-        """If apply_params raises, error should be recorded."""
+        """If apply_params returns failures, errors should be recorded."""
         profile = load_profile("safety-defaults")
         current = {k: profile[k] for k in profile}
         first_key = next(iter(current))
@@ -116,13 +120,38 @@ class TestSyncParams:
             patch("mower_rover.pixhawk.sync.fetch_params", return_value=current),
             patch(
                 "mower_rover.pixhawk.sync.apply_params",
-                side_effect=RuntimeError("write error"),
+                return_value=ApplyResult(
+                    applied={},
+                    failures=[(first_key, profile[first_key], "no PARAM_VALUE echo")],
+                ),
             ),
         ):
             result = sync_params(conn, profiles=("safety-defaults",))
 
         assert not result.ok
-        assert any("apply_params" in e for e in result.errors)
+        assert any(first_key in e for e in result.errors)
+
+    def test_unknown_param_warning_not_error(self) -> None:
+        """Params in desired but not on firmware produce warnings, not errors."""
+        profile = load_profile("safety-defaults")
+        # Return a current set that is missing one key from the profile.
+        # This makes diff report it as 'added' (in desired, not on firmware).
+        current = {k: profile[k] for k in profile}
+        missing_key = next(iter(current))
+        del current[missing_key]
+
+        conn = MagicMock()
+        with (
+            patch("mower_rover.pixhawk.sync.fetch_params", return_value=current),
+            patch(
+                "mower_rover.pixhawk.sync.apply_params",
+                return_value=ApplyResult(applied={}, failures=[]),
+            ),
+        ):
+            result = sync_params(conn, profiles=("safety-defaults",))
+
+        # The unknown-param warning should NOT cause an error in SyncResult
+        assert result.ok
 
 
 # ---------------------------------------------------------------------------

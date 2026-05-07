@@ -178,6 +178,22 @@ class TestGenerateWestonUnit:
         content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
         assert "After=multi-user.target" not in content
 
+    def test_seatd_poll_exec_start_pre(self) -> None:
+        content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
+        assert "[ -S /run/seatd.sock ]" in content
+        # seatd poll must appear before DRM device poll
+        seatd_pos = content.index("seatd.sock")
+        drm_pos = content.index("/dev/dri/card0")
+        assert seatd_pos < drm_pos
+
+    def test_exec_start_pre_order(self) -> None:
+        content = generate_weston_unit_file(user="vincent", home_dir="/home/vincent")
+        lines = [l for l in content.splitlines() if l.startswith("ExecStartPre=")]
+        assert len(lines) == 3
+        assert "mkdir" in lines[0]
+        assert "seatd" in lines[1]
+        assert "card0" in lines[2]
+
 
 # ---------------------------------------------------------------------------
 # generate_mavproxy_unit_file
@@ -497,3 +513,7 @@ class TestGenerateKioskRendererUnitFile:
             f"After={WESTON_UNIT_NAME}.service {KIOSK_DATA_UNIT_NAME}.service"
             in content
         )
+
+    def test_start_limit_burst_15(self) -> None:
+        content = self._content()
+        assert "StartLimitBurst=15" in content

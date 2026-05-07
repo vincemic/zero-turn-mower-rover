@@ -19,7 +19,10 @@ FS_ACTION: 2                  # Hold for any failsafe (asserted explicitly per Q
 
 # --- GCS heartbeat failsafe ------------------------------------------------
 FS_GCS_ENABLE: 1              # Hold if MAVLink heartbeat lost (decision Q3)
-FS_GCS_TIMEOUT: 5             # seconds without heartbeat before action
+# FS_TIMEOUT: 5               # On Rover 4.6.3, GCS timeout is FS_TIMEOUT (shared with RC).
+#                              # Default 1.5s. Set to 5 after field validation — changing
+#                              # this also affects RC failsafe timing.
+#                              # Rover 4.7+ has dedicated FS_GCS_TIMEOUT instead.
 
 # --- Arming checks ---------------------------------------------------------
 # Bitmask 13816 = GPS(8) + INS(16) + Params(32) + RC(64) + BoardV(128)

@@ -18,6 +18,7 @@ from mower_rover.cli.bringup import (
     _build_depthai_check,
     _build_rtabmap_check,
     _build_slam_node_check,
+    _check_single_db,
     _check_ssh_ok,
     _clear_host_key_needed,
     _cli_installed,
@@ -26,12 +27,14 @@ from mower_rover.cli.bringup import (
     _linger_enabled,
     _pixhawk_udev_done,
     _reboot_check,
+    _resolve_active_db_path,
     _restore_binaries_check,
     _run_archive_binaries,
     _run_build_depthai,
     _run_build_rtabmap,
     _run_build_slam_node,
     _run_clear_host_key,
+    _run_db_check,
     _run_enable_linger,
     _run_final_verify,
     _run_harden,
@@ -724,6 +727,10 @@ class TestRunVslamConfig:
         mock_client.run.side_effect = [
             _ssh_ok(),  # sudo cp
             _ssh_ok(),  # rm cleanup
+            # _resolve_active_db_path → returns default path
+            _ssh_ok(stdout="/var/lib/mower/rtabmap.db\n"),
+            _ssh_ok(),  # mkdir -p _test zone
+            _ssh_ok(),  # sed -i to update config
         ]
 
         _run_vslam_config(mock_client, bctx)
@@ -1340,7 +1347,12 @@ class TestRunFinalVerify:
 
 
 class TestBringupIntegrationAllSkip:
-    """All 19 check() functions return True → every step skips."""
+    """All skippable check() functions return True → skippable steps skip.
+
+    Service-install steps (service, install-mavproxy, vslam-services,
+    pixhawk-sync, kiosk-services) always run (check=lambda c: False),
+    so they are patched at the execute level instead.
+    """
 
     def test_all_steps_skip(self, runner: CliRunner, tmp_path: Path) -> None:
         import contextlib
@@ -1375,10 +1387,17 @@ class TestBringupIntegrationAllSkip:
             "mower_rover.cli.bringup._cli_installed": True,
             "mower_rover.cli.bringup._verify_check": True,
             "mower_rover.cli.bringup._vslam_config_exists": True,
-            "mower_rover.cli.bringup._service_active": True,
-            "mower_rover.cli.bringup._vslam_services_active": True,
             "mower_rover.cli.bringup._final_verify_check": True,
         }
+
+        # Service-install steps always run — stub their execute functions
+        always_run_patches = [
+            "mower_rover.cli.bringup._run_service",
+            "mower_rover.cli.bringup._run_install_mavproxy",
+            "mower_rover.cli.bringup._run_vslam_services",
+            "mower_rover.cli.bringup._run_pixhawk_sync",
+            "mower_rover.cli.bringup._run_kiosk_services",
+        ]
 
         with contextlib.ExitStack() as stack:
             mock_ep = stack.enter_context(
@@ -1389,6 +1408,8 @@ class TestBringupIntegrationAllSkip:
             )
             for target, rv in patches.items():
                 stack.enter_context(patch(target, return_value=rv))
+            for target in always_run_patches:
+                stack.enter_context(patch(target))
 
             mock_ep.return_value = fake_client.endpoint
             mock_cf.return_value = fake_client
@@ -1399,7 +1420,9 @@ class TestBringupIntegrationAllSkip:
             )
         assert result.exit_code == 0, result.output
         assert "Bringup complete" in result.output
-        assert result.output.count("Already satisfied") == 23
+        # 18 skippable steps + 5 always-run service steps + 2 always-run
+        # checks (vslam-db-check, kiosk-probe) = 25 total; 18 skip
+        assert result.output.count("Already satisfied") == 18
 
 
 class TestBringupIntegrationFromStep:
@@ -1423,8 +1446,11 @@ class TestBringupIntegrationFromStep:
             patch("mower_rover.cli.jetson_remote.client_for") as mock_cf,
             patch("mower_rover.cli.bringup._verify_check", return_value=True),
             patch("mower_rover.cli.bringup._vslam_config_exists", return_value=True),
-            patch("mower_rover.cli.bringup._service_active", return_value=True),
-            patch("mower_rover.cli.bringup._vslam_services_active", return_value=True),
+            patch("mower_rover.cli.bringup._run_service"),
+            patch("mower_rover.cli.bringup._run_install_mavproxy"),
+            patch("mower_rover.cli.bringup._run_vslam_services"),
+            patch("mower_rover.cli.bringup._run_pixhawk_sync"),
+            patch("mower_rover.cli.bringup._run_kiosk_services"),
             patch("mower_rover.cli.bringup._final_verify_check", return_value=True),
         ):
             mock_ep.return_value = fake_client.endpoint
@@ -1480,10 +1506,17 @@ class TestBringupIntegrationContinueOnError:
             "mower_rover.cli.bringup._cli_installed": True,
             "mower_rover.cli.bringup._verify_check": True,
             "mower_rover.cli.bringup._vslam_config_exists": True,
-            "mower_rover.cli.bringup._service_active": True,
-            "mower_rover.cli.bringup._vslam_services_active": True,
             "mower_rover.cli.bringup._final_verify_check": True,
         }
+
+        # Service-install steps always run — stub their execute functions
+        always_run_patches = [
+            "mower_rover.cli.bringup._run_service",
+            "mower_rover.cli.bringup._run_install_mavproxy",
+            "mower_rover.cli.bringup._run_vslam_services",
+            "mower_rover.cli.bringup._run_pixhawk_sync",
+            "mower_rover.cli.bringup._run_kiosk_services",
+        ]
 
         with contextlib.ExitStack() as stack:
             stack.enter_context(
@@ -1504,6 +1537,8 @@ class TestBringupIntegrationContinueOnError:
             )
             for target, rv in check_patches.items():
                 stack.enter_context(patch(target, return_value=rv))
+            for target in always_run_patches:
+                stack.enter_context(patch(target))
 
             mock_ep.return_value = fake_client.endpoint
             mock_cf.return_value = fake_client
@@ -1704,3 +1739,153 @@ class TestFinalVerify30sWait:
 
         # The 30s wait must be present in the sleep calls
         assert 30 in sleep_calls, f"Expected 30 in sleep calls: {sleep_calls}"
+
+
+# ---------------------------------------------------------------------------
+# Zone-aware DB path resolution
+# ---------------------------------------------------------------------------
+
+
+class TestResolveActiveDbPath:
+    """_resolve_active_db_path reads database_path from deployed config."""
+
+    def test_reads_db_path_from_config(self, mock_client: MagicMock) -> None:
+        mock_client.run.return_value = _ssh_ok(
+            stdout="/var/lib/mower/zones/south/rtabmap.db\n"
+        )
+        assert _resolve_active_db_path(mock_client) == "/var/lib/mower/zones/south/rtabmap.db"
+
+    def test_falls_back_on_ssh_error(self, mock_client: MagicMock) -> None:
+        mock_client.run.side_effect = SshError("timeout")
+        assert _resolve_active_db_path(mock_client) == "/var/lib/mower/rtabmap.db"
+
+    def test_falls_back_on_command_failure(self, mock_client: MagicMock) -> None:
+        mock_client.run.return_value = _ssh_fail()
+        assert _resolve_active_db_path(mock_client) == "/var/lib/mower/rtabmap.db"
+
+
+class TestRunDbCheckZoneAware:
+    """_run_db_check resolves active DB and scans per-zone DBs."""
+
+    def test_uses_config_db_path(self, mock_client: MagicMock, tmp_path: Path) -> None:
+        """Mock SSH returning vslam.yaml with custom database_path."""
+        bctx = _bctx(tmp_path)
+
+        call_count = 0
+
+        def side_effect(argv, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            cmd = argv if isinstance(argv, list) else [argv]
+            joined = " ".join(cmd)
+
+            # 1st call: _resolve_active_db_path → python3 -c ...
+            if "python3" in joined:
+                return _ssh_ok(stdout="/var/lib/mower/zones/ne/rtabmap.db\n")
+
+            # test -f → DB exists
+            if "test" in joined and "-f" in joined:
+                return _ssh_ok()
+
+            # stat → valid size
+            if "stat" in joined:
+                return _ssh_ok(stdout="4096\n")
+
+            # sqlite3 PRAGMA
+            if "sqlite3" in joined:
+                return _ssh_ok(stdout="ok\n")
+
+            # find → no extra zone DBs
+            if "find" in joined:
+                return _ssh_ok(stdout="")
+
+            return _ssh_ok()
+
+        mock_client.run.side_effect = side_effect
+        _run_db_check(mock_client, bctx)
+
+        # Verify python3 config read was called
+        first_call = mock_client.run.call_args_list[0]
+        assert "python3" in " ".join(first_call[0][0])
+
+    def test_fallback_on_config_read_failure(
+        self, mock_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Config read failure → falls back to /var/lib/mower/rtabmap.db."""
+        bctx = _bctx(tmp_path)
+
+        call_count = 0
+
+        def side_effect(argv, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            cmd = argv if isinstance(argv, list) else [argv]
+            joined = " ".join(cmd)
+
+            # Config read fails
+            if "python3" in joined:
+                raise SshError("timeout")
+
+            # test -f → DB absent
+            if "test" in joined and "-f" in joined:
+                return _ssh_fail()
+
+            # find → no zone DBs
+            if "find" in joined:
+                return _ssh_fail()
+
+            return _ssh_ok()
+
+        mock_client.run.side_effect = side_effect
+        _run_db_check(mock_client, bctx)
+        # No exception raised — function is resilient to config read failure
+
+    def test_scans_per_zone_dbs(
+        self, mock_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """find returns multiple per-zone DB paths → all are checked."""
+        bctx = _bctx(tmp_path)
+
+        zone_dbs_found = (
+            "/var/lib/mower/zones/ne/rtabmap.db\n"
+            "/var/lib/mower/zones/south/rtabmap.db\n"
+        )
+
+        checked_paths: list[str] = []
+
+        def side_effect(argv, **kwargs):
+            cmd = argv if isinstance(argv, list) else [argv]
+            joined = " ".join(cmd)
+
+            # Config read → active DB
+            if "python3" in joined:
+                return _ssh_ok(stdout="/var/lib/mower/zones/ne/rtabmap.db\n")
+
+            # test -f → track which paths are checked
+            if "test" in joined and "-f" in joined:
+                for part in cmd:
+                    if part.startswith("/var/lib/mower"):
+                        checked_paths.append(part)
+                return _ssh_ok()
+
+            # stat → valid size
+            if "stat" in joined:
+                return _ssh_ok(stdout="8192\n")
+
+            # sqlite3 PRAGMA
+            if "sqlite3" in joined:
+                return _ssh_ok(stdout="ok\n")
+
+            # find → return zone DBs
+            if "find" in joined:
+                return _ssh_ok(stdout=zone_dbs_found)
+
+            return _ssh_ok()
+
+        mock_client.run.side_effect = side_effect
+        _run_db_check(mock_client, bctx)
+
+        # Active DB (ne) should be checked, plus the extra south zone DB
+        # ne is the active DB (checked first), south is discovered by find
+        assert any("ne/rtabmap.db" in p for p in checked_paths)
+        assert any("south/rtabmap.db" in p for p in checked_paths)

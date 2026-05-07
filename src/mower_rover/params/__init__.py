@@ -13,9 +13,10 @@ from __future__ import annotations
 from mower_rover.params.baseline import BASELINE_PATH, load_baseline
 from mower_rover.params.diff import ParamDiff, diff_params, render_diff
 from mower_rover.params.io import ParamSet, load_param_file, write_json_snapshot
-from mower_rover.params.mav import apply_params, fetch_params
+from mower_rover.params.mav import ApplyResult, apply_params, fetch_params
 
 __all__ = [
+    "ApplyResult",
     "BASELINE_PATH",
     "ParamDiff",
     "ParamSet",

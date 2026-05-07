@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from mower_rover.logging_setup.setup import get_logger
 from mower_rover.params.io import ParamSet
+
+
+@dataclass
+class ApplyResult:
+    """Result of applying a set of params to the autopilot."""
+
+    applied: dict[str, float] = field(default_factory=dict)
+    failures: list[tuple[str, float, str]] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return len(self.failures) == 0
+
+    @property
+    def partial(self) -> bool:
+        return len(self.applied) > 0 and len(self.failures) > 0
 
 # Single-precision verify tolerance.
 _VERIFY_TOL = 1e-4
@@ -62,11 +79,11 @@ def apply_params(
     verify: bool = True,
     per_param_timeout_s: float = 2.0,
     max_retries: int = 3,
-) -> dict[str, float]:
+) -> ApplyResult:
     """Apply each param via `param_set_send` and verify by reading back the echo.
 
-    Returns the dict of values actually applied (post-verify). Raises
-    `RuntimeError` listing any params that could not be verified.
+    Returns an `ApplyResult` with the dict of values actually applied
+    (post-verify) and a list of any params that failed.
     """
     from pymavlink import mavutil  # lazy import — keeps test collection cheap
 
@@ -108,13 +125,7 @@ def apply_params(
             log.debug("param_applied", name=name, value=success_value)
 
     log.info("apply_complete", applied=len(applied), failures=len(failures))
-    if failures:
-        joined = ", ".join(f"{n}={v} ({e})" for n, v, e in failures[:10])
-        raise RuntimeError(
-            f"Failed to apply/verify {len(failures)} param(s): {joined}"
-            + (" ..." if len(failures) > 10 else "")
-        )
-    return applied
+    return ApplyResult(applied=applied, failures=failures)
 
 
 def _await_param_echo(conn: Any, name: str, timeout_s: float) -> float | None:
@@ -141,4 +152,4 @@ def _encode_name(name: str) -> bytes:
     return encoded
 
 
-__all__ = ["apply_params", "fetch_params"]
+__all__ = ["ApplyResult", "apply_params", "fetch_params"]

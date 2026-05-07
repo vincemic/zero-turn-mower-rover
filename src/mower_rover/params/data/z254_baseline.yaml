@@ -118,7 +118,6 @@ FS_ACTION: 2                  # Hold (NOT RTL — RTL drives in straight line)
 FS_TIMEOUT: 1.5
 FS_THR_ENABLE: 0              # ⚠️ SUPERSEDED — FrSky receiver added; must be reconfigured for RC failsafe
 FS_GCS_ENABLE: 1              # GCS heartbeat failsafe (critical)
-FS_GCS_TIMEOUT: 5
 FS_CRASH_CHECK: 2             # Hold on crash (Phase 7)
 CRASH_ANGLE: 30               # deg from upright (Phase 7)
 FS_EKF_ACTION: 2              # Hold on EKF failure

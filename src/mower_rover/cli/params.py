@@ -168,8 +168,16 @@ def apply_command(
             console.print("[bold yellow]--dry-run set; not writing to autopilot.[/bold yellow]")
             return
 
-        apply_params(conn, desired)
-        console.print(f"[bold green]Applied {len(desired)} params.[/bold green]")
+        result = apply_params(conn, desired)
+        if result.failures:
+            for name, value, reason in result.failures:
+                console.print(f"[bold red]FAILED: {name}={value} — {reason}[/bold red]")
+        if result.applied:
+            console.print(
+                f"[bold green]Applied {len(result.applied)} params.[/bold green]"
+            )
+        if not result.ok:
+            raise typer.Exit(code=1)
 
 
 @requires_confirmation(

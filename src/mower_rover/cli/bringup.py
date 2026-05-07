@@ -60,7 +60,6 @@ from mower_rover.service.unit import (
     WESTON_UNIT_NAME,
     generate_kiosk_data_unit_file,
     generate_kiosk_renderer_unit_file,
-    generate_kiosk_unit_file,
     generate_mavproxy_unit_file,
     generate_weston_unit_file,
 )
@@ -536,7 +535,6 @@ _BUILD_APT_PACKAGES = (
 
 def _build_deps_check(client: JetsonClient) -> bool:
     """Return True if every package in _BUILD_APT_PACKAGES is installed."""
-    " ".join(_BUILD_APT_PACKAGES)
     try:
         r = client.run(
             ["dpkg", "-s", *_BUILD_APT_PACKAGES],
@@ -1354,6 +1352,25 @@ def _run_vslam_config(client: JetsonClient, bctx: BringupContext) -> None:
     with contextlib.suppress(SshError):
         client.run(["rm", "-f", "~/vslam.yaml"], timeout=10)
 
+    # If no zone is configured, default to _test zone for DB isolation
+    _default_db = "/var/lib/mower/rtabmap.db"
+    current_db = _resolve_active_db_path(client)
+    if current_db == _default_db:
+        test_zone_dir = "/var/lib/mower/zones/_test"
+        with contextlib.suppress(SshError):
+            client.run(["sudo", "mkdir", "-p", test_zone_dir], timeout=10)
+        with contextlib.suppress(SshError):
+            client.run(
+                [
+                    "sudo", "sed", "-i",
+                    "s|database_path: " + _default_db + "|"
+                    "database_path: " + test_zone_dir + "/rtabmap.db|",
+                    "/etc/mower/vslam.yaml",
+                ],
+                timeout=10,
+            )
+        bctx.console.print("  Activated default '_test' zone for DB isolation.")
+
 
 # ---------------------------------------------------------------------------
 # Step: vslam-db-check
@@ -1367,58 +1384,77 @@ def _db_check_done(_client: JetsonClient) -> bool:
     return False  # Always runs — cheap integrity check
 
 
-def _run_db_check(client: JetsonClient, bctx: BringupContext) -> None:
-    """Check RTAB-Map DB integrity; quarantine on failure.
+def _resolve_active_db_path(client: JetsonClient) -> str:
+    """Read the active DB path from deployed vslam config, with fallback."""
+    _default = "/var/lib/mower/rtabmap.db"
+    try:
+        result = client.run(
+            [
+                "python3", "-c",
+                "import yaml; c=yaml.safe_load(open('/etc/mower/vslam.yaml'));"
+                "print(c.get('vslam',{}).get('database_path','"
+                + _default + "'))",
+            ],
+            timeout=15,
+        )
+        return result.stdout.strip() if result.ok else _default
+    except SshError:
+        return _default
 
-    Never raises — bringup continues regardless of outcome.
+
+def _check_single_db(
+    client: JetsonClient,
+    bctx: BringupContext,
+    log: Any,
+    db_path: str,
+) -> None:
+    """Run size + PRAGMA integrity check on a single DB file.
+
+    Quarantines on failure; never raises.
     """
-    log = get_logger("bringup").bind(op="vslam-db-check")
-    db_path = "~/.ros/rtabmap.db"
-
     # 1. Check if DB exists
     try:
         result = client.run(["test", "-f", db_path], timeout=15)
     except SshError:
-        bctx.console.print("  DB absent (SSH error during check) — PASS.")
+        bctx.console.print(f"  {db_path}: absent (SSH error) — PASS.")
         return
-
     if not result.ok:
-        bctx.console.print("  DB absent — PASS (fresh install).")
+        bctx.console.print(f"  {db_path}: absent — PASS.")
         return
 
     # 2. Size sanity check
     try:
         result = client.run(["stat", "-c", "%s", db_path], timeout=15)
     except SshError as exc:
-        log.warning("db_check_stat_failed", error=str(exc))
-        bctx.console.print(f"  [yellow]stat failed:[/yellow] {exc} — quarantining.")
+        log.warning("db_check_stat_failed", error=str(exc), path=db_path)
+        bctx.console.print(f"  [yellow]{db_path}: stat failed:[/yellow] {exc} — quarantining.")
         _quarantine_db(client, bctx, log, db_path)
         return
 
     if not result.ok:
-        log.warning("db_check_stat_nonzero", returncode=result.returncode)
-        bctx.console.print("  [yellow]stat returned non-zero — quarantining.[/yellow]")
+        log.warning("db_check_stat_nonzero", returncode=result.returncode, path=db_path)
+        bctx.console.print(f"  [yellow]{db_path}: stat returned non-zero — quarantining.[/yellow]")
         _quarantine_db(client, bctx, log, db_path)
         return
 
     try:
         size = int(result.stdout.strip())
     except (ValueError, TypeError):
-        log.warning("db_check_size_parse_failed", stdout=result.stdout.strip())
-        bctx.console.print("  [yellow]Could not parse DB size — quarantining.[/yellow]")
+        log.warning("db_check_size_parse_failed", stdout=result.stdout.strip(), path=db_path)
+        bctx.console.print(f"  [yellow]{db_path}: could not parse size — quarantining.[/yellow]")
         _quarantine_db(client, bctx, log, db_path)
         return
 
     if size == 0:
         log.warning("db_check_empty", size=size, path=db_path)
-        bctx.console.print("  [yellow]DB is 0 bytes — quarantining.[/yellow]")
+        bctx.console.print(f"  [yellow]{db_path}: 0 bytes — quarantining.[/yellow]")
         _quarantine_db(client, bctx, log, db_path)
         return
 
     if size > _RTABMAP_DB_MAX_BYTES:
         log.warning("db_check_too_large", size=size, max=_RTABMAP_DB_MAX_BYTES, path=db_path)
         bctx.console.print(
-            f"  [yellow]DB too large ({size} bytes > 10 GiB) — quarantining.[/yellow]"
+            f"  [yellow]{db_path}: too large ({size} bytes > 10 GiB) — quarantining.[/yellow]"
         )
         _quarantine_db(client, bctx, log, db_path)
         return
@@ -1430,21 +1466,55 @@ def _run_db_check(client: JetsonClient, bctx: BringupContext) -> None:
             timeout=60,
         )
     except SshError as exc:
-        log.warning("db_check_pragma_failed", error=str(exc))
-        bctx.console.print(f"  [yellow]sqlite3 PRAGMA failed:[/yellow] {exc} — quarantining.")
+        log.warning("db_check_pragma_failed", error=str(exc), path=db_path)
+        bctx.console.print(f"  [yellow]{db_path}: PRAGMA failed:[/yellow] {exc} — quarantining.")
         _quarantine_db(client, bctx, log, db_path)
         return
 
     pragma_output = result.stdout.strip()
     if pragma_output == "ok":
-        bctx.console.print("  DB integrity check — PASS.")
+        bctx.console.print(f"  {db_path}: integrity check — PASS.")
         return
 
     log.warning("db_check_integrity_failed", pragma_output=pragma_output, path=db_path)
     bctx.console.print(
-        f"  [yellow]PRAGMA integrity_check returned:[/yellow] {pragma_output!r} — quarantining."
+        f"  [yellow]{db_path}: PRAGMA returned:[/yellow] {pragma_output!r} — quarantining."
     )
     _quarantine_db(client, bctx, log, db_path)
+
+
+def _run_db_check(client: JetsonClient, bctx: BringupContext) -> None:
+    """Check RTAB-Map DB integrity; quarantine on failure.
+
+    Reads the active DB path from /etc/mower/vslam.yaml and also scans
+    per-zone DBs under /var/lib/mower/zones/*/rtabmap.db.
+
+    Never raises — bringup continues regardless of outcome.
+    """
+    log = get_logger("bringup").bind(op="vslam-db-check")
+
+    # Resolve active DB path from deployed config
+    db_path = _resolve_active_db_path(client)
+    bctx.console.print(f"  Active DB path: {db_path}")
+
+    # Check the active DB
+    _check_single_db(client, bctx, log, db_path)
+
+    # Scan per-zone DBs
+    checked = {db_path}
+    try:
+        result = client.run(
+            ["find", "/var/lib/mower/zones", "-name", "rtabmap.db", "-type", "f"],
+            timeout=15,
+        )
+        if result.ok:
+            for zone_db in result.stdout.strip().splitlines():
+                zone_db = zone_db.strip()
+                if zone_db and zone_db not in checked:
+                    checked.add(zone_db)
+                    _check_single_db(client, bctx, log, zone_db)
+    except SshError:
+        pass  # Zones dir may not exist yet
 
 
 def _quarantine_db(
@@ -1716,44 +1786,63 @@ def _run_install_mavproxy(client: JetsonClient, bctx: BringupContext) -> None:
     user = client.endpoint.user
     home = f"/home/{user}"
 
-    # 1. Install MAVProxy via uv pip into the tool venv
-    bctx.console.print("  Installing MAVProxy via pip…")
+    # 1. Check if MAVProxy is already installed — skip 300s pip install
+    mavproxy_installed = False
     try:
-        result = client.run(
-            [
-                "~/.local/bin/uv pip install --python"
-                " ~/.local/share/uv/tools/mower-rover/bin/python"
-                " MAVProxy future setuptools"
-            ],
-            timeout=300,
-        )
-    except SshError as exc:
-        bctx.console.print(f"  [red]MAVProxy pip install failed:[/red] {exc}")
-        raise typer.Exit(code=3) from exc
-    if not result.ok:
-        bctx.console.print(f"  [red]MAVProxy pip install exited {result.returncode}:[/red]")
-        if result.stderr:
-            bctx.console.print(result.stderr, style="dim", highlight=False)
-        raise typer.Exit(code=3)
-
-    # Ensure ~/.mavproxy dir exists (MAVProxy needs it on first run)
-    with contextlib.suppress(SshError):
-        client.run(["mkdir -p ~/.mavproxy"], timeout=10)
-
-    # Verify installation
-    bctx.console.print("  Verifying MAVProxy…")
-    try:
-        result = client.run(
+        ver_result = client.run(
             ["~/.local/share/uv/tools/mower-rover/bin/mavproxy.py --version"],
             timeout=15,
         )
-    except SshError as exc:
-        bctx.console.print(f"  [red]MAVProxy verify failed:[/red] {exc}")
-        raise typer.Exit(code=3) from exc
-    if not result.ok:
-        bctx.console.print(f"  [red]MAVProxy --version exited {result.returncode}.[/red]")
-        raise typer.Exit(code=3)
-    bctx.console.print(f"  MAVProxy version: {result.stdout.strip()}")
+        if ver_result.ok:
+            bctx.console.print(
+                f"  MAVProxy already installed: {ver_result.stdout.strip()}"
+            )
+            mavproxy_installed = True
+    except SshError:
+        pass  # not installed — will install below
+
+    if not mavproxy_installed:
+        bctx.console.print("  Installing MAVProxy via pip…")
+        try:
+            result = client.run(
+                [
+                    "~/.local/bin/uv pip install --python"
+                    " ~/.local/share/uv/tools/mower-rover/bin/python"
+                    " MAVProxy future setuptools"
+                ],
+                timeout=300,
+            )
+        except SshError as exc:
+            bctx.console.print(f"  [red]MAVProxy pip install failed:[/red] {exc}")
+            raise typer.Exit(code=3) from exc
+        if not result.ok:
+            bctx.console.print(
+                f"  [red]MAVProxy pip install exited {result.returncode}:[/red]"
+            )
+            if result.stderr:
+                bctx.console.print(result.stderr, style="dim", highlight=False)
+            raise typer.Exit(code=3)
+
+        # Ensure ~/.mavproxy dir exists (MAVProxy needs it on first run)
+        with contextlib.suppress(SshError):
+            client.run(["mkdir -p ~/.mavproxy"], timeout=10)
+
+        # Verify installation
+        bctx.console.print("  Verifying MAVProxy…")
+        try:
+            result = client.run(
+                ["~/.local/share/uv/tools/mower-rover/bin/mavproxy.py --version"],
+                timeout=15,
+            )
+        except SshError as exc:
+            bctx.console.print(f"  [red]MAVProxy verify failed:[/red] {exc}")
+            raise typer.Exit(code=3) from exc
+        if not result.ok:
+            bctx.console.print(
+                f"  [red]MAVProxy --version exited {result.returncode}.[/red]"
+            )
+            raise typer.Exit(code=3)
+        bctx.console.print(f"  MAVProxy version: {result.stdout.strip()}")
 
     # 2. Deploy + start mower-mavproxy.service
     bctx.console.print("  Deploying mower-mavproxy service unit…")
@@ -2300,7 +2389,7 @@ BRINGUP_STEPS: list[BringupStep] = [
     BringupStep(
         name="service",
         description="mower-health.service",
-        check=lambda c: _service_active(c),
+        check=lambda c: False,
         execute=lambda c, b: _run_service(c, b),
         needs_confirm=True,
     ),
@@ -2313,28 +2402,28 @@ BRINGUP_STEPS: list[BringupStep] = [
     BringupStep(
         name="install-mavproxy",
         description="MAVProxy telemetry forwarder",
-        check=lambda c: _mavproxy_active(c),
+        check=lambda c: False,
         execute=lambda c, b: _run_install_mavproxy(c, b),
         needs_confirm=True,
     ),
     BringupStep(
         name="vslam-services",
         description="VSLAM + bridge systemd services",
-        check=lambda c: _vslam_services_active(c),
+        check=lambda c: False,
         execute=lambda c, b: _run_vslam_services(c, b),
         needs_confirm=True,
     ),
     BringupStep(
         name="pixhawk-sync",
         description="Pixhawk param + Lua sync service",
-        check=lambda c: _pixhawk_sync_done(c),
+        check=lambda c: False,
         execute=lambda c, b: _run_pixhawk_sync(c, b),
         needs_confirm=True,
     ),
     BringupStep(
         name="kiosk-services",
         description="Weston + kiosk dashboard services",
-        check=lambda c: _kiosk_services_active(c),
+        check=lambda c: False,
         execute=lambda c, b: _run_kiosk_services(c, b),
         needs_confirm=True,
     ),

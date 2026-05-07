@@ -337,6 +337,8 @@ static SlamEngine create_slam_engine(const SlamConfig &cfg) {
     /* Memory management. */
     char mem_str[32];
     snprintf(mem_str, sizeof(mem_str), "%d", cfg.memory_threshold_mb);
+    params.insert(rtabmap::ParametersPair(
+        rtabmap::Parameters::kRtabmapMemoryThr(), mem_str));
 
     /* Loop closure. */
     if (!cfg.loop_closure) {
